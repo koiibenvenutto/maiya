@@ -366,7 +366,7 @@ def cleanup_old_pages():
         print(f"\nCleaned up {removed_count} old files")
     return removed_count
 
-def main():
+async def main():
     # Get last sync time
     last_sync = get_last_sync_time()
     print(f"Last sync time: {last_sync if last_sync else 'Never'}")
@@ -419,7 +419,7 @@ def main():
         return None
     
     # Run the async check for updates
-    updated_page_ids = asyncio.run(check_page_updates())
+    updated_page_ids = await check_page_updates()
     
     # Combine updated and missing pages
     pages_to_sync = list(set(updated_page_ids + missing_page_ids))
@@ -437,7 +437,7 @@ def main():
         async def process_pages():
             tasks = []
             for page_id in pages_to_sync:
-                tasks.append(process_page(page_id))
+                tasks.append(asyncio.create_task(process_page(page_id)))
             
             # Process in batches of 5
             batch_size = 5
@@ -453,8 +453,7 @@ def main():
             save_page_to_file(page_id, markdown_content)
             print("-" * 80)
         
-        # Run the async processing
-        asyncio.run(process_pages())
+        await process_pages()
     
     # Clean up old pages
     cleanup_old_pages()
@@ -465,4 +464,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

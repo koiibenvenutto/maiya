@@ -1,4 +1,5 @@
 from anthropic import Anthropic
+from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import glob
@@ -18,8 +19,12 @@ from datetime import datetime
 # Load environment variables
 load_dotenv()
 
-# Initialize Anthropic client
-client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+# Initialize API clients
+anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Global variable to track which API is being used
+current_api = "anthropic"
 
 # Initialize Rich console with a custom theme
 custom_theme = Theme({
@@ -72,19 +77,28 @@ def format_message(role, content):
         return Panel(Markdown(content), style="blue", title="Claude")
 
 def print_welcome_message():
-    """Print a welcome message with instructions."""
-    welcome_md = """
-# Welcome to the Chat Interface
+    """Print welcome message with available commands."""
+    console.print(Panel.fit(
+        "[bold cyan]Welcome to the Chat Interface![/bold cyan]\n\n"
+        "[bold]Available Commands:[/bold]\n"
+        "- [green]exit[/green]: Exit the chat\n"
+        "- [green]clear[/green]: Clear chat history\n"
+        "- [green]help[/green]: Show this help message\n"
+        "- [green]sync[/green]: Sync Notion pages\n"
+        f"- [green]switch[/green]: Switch between Anthropic and OpenAI (currently using {current_api})",
+        title="Help",
+        border_style="cyan"
+    ))
 
-Available commands:
-- `exit`: Exit the chat
-- `clear`: Clear the chat history
-- `help`: Show this help message
-- `sync`: Sync latest pages from Notion
-
-Your messages support markdown formatting!
-"""
-    console.print(Markdown(welcome_md))
+def switch_api():
+    """Switch between Anthropic and OpenAI APIs."""
+    global current_api
+    if current_api == "anthropic":
+        current_api = "openai"
+        console.print("[info]Switched to OpenAI[/info]")
+    else:
+        current_api = "anthropic"
+        console.print("[info]Switched to Anthropic[/info]")
 
 def sync_notion_pages():
     """Sync pages from Notion."""
@@ -143,6 +157,10 @@ def chat():
                     messages = []
                     console.print("[info]Chat context updated with new pages[/info]")
                 continue
+            elif user_input.lower() == 'switch':
+                switch_api()
+                print_welcome_message()
+                continue
 
             # Add user message to history
             messages.append({"role": "user", "content": user_input})
@@ -150,17 +168,23 @@ def chat():
             # Display user message with markdown formatting
             console.print(format_message("user", user_input))
 
-            # Get Claude's response
-            response = client.messages.create(
-                model="claude-3-7-sonnet-20250219",
-                max_tokens=4096,
-                system=system_prompt,  # Pass system prompt as a top-level parameter
-                messages=messages,
-                temperature=0.7,
-            )
-
-            # Get the response content
-            assistant_message = response.content[0].text
+            # Get response based on current API
+            if current_api == "anthropic":
+                response = anthropic_client.messages.create(
+                    model="claude-3-7-sonnet-20250219",
+                    max_tokens=4096,
+                    system=system_prompt,
+                    messages=messages,
+                    temperature=0.7,
+                )
+                assistant_message = response.content[0].text
+            else:  # OpenAI
+                response = openai_client.chat.completions.create(
+                    model="gpt-4-turbo-preview",
+                    messages=[{"role": "system", "content": system_prompt}] + messages,
+                    temperature=0.7,
+                )
+                assistant_message = response.choices[0].message.content
 
             # Add assistant message to history
             messages.append({"role": "assistant", "content": assistant_message})
