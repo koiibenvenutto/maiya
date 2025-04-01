@@ -60,3 +60,9 @@ pids
 
 # Anthropic project files (if any)
 .anthropic/
+
+# Project specific
+notion-pages/
+last_sync.json
+.chat_history
+claude_project_id.txt

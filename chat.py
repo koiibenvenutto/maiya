@@ -7,6 +7,11 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.formatted_text import HTML
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.theme import Theme
 import json
 from datetime import datetime
 
@@ -15,6 +20,16 @@ load_dotenv()
 
 # Initialize Anthropic client
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# Initialize Rich console with a custom theme
+custom_theme = Theme({
+    "info": "cyan",
+    "warning": "yellow",
+    "error": "red",
+    "user": "green",
+    "assistant": "blue",
+})
+console = Console(theme=custom_theme)
 
 # Create a session for the prompt
 session = PromptSession(history=FileHistory('.chat_history'))
@@ -29,124 +44,136 @@ style = Style.from_dict({
 
 def read_markdown_files(directory="notion-pages"):
     """Read all markdown files from the specified directory."""
-    markdown_files = glob.glob(os.path.join(directory, "*.md"))
     pages = []
-    
-    for file_path in markdown_files:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-            # Extract page ID from filename (last part before .md)
-            page_id = os.path.splitext(os.path.basename(file_path))[0].split()[-1]
-            pages.append({
-                'id': page_id,
-                'content': content,
-                'filename': os.path.basename(file_path)
-            })
-    
+    if os.path.exists(directory):
+        for file in glob.glob(os.path.join(directory, "*.md")):
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    filename = os.path.basename(file)
+                    pages.append({"filename": filename, "content": content})
+            except Exception as e:
+                console.print(f"[error]Error reading {file}: {str(e)}[/error]")
     return pages
 
 def create_system_prompt(pages):
-    """Create a system prompt that includes the context from markdown files."""
-    # Read project instructions
-    with open('project-instructions.md', 'r', encoding='utf-8') as f:
-        instructions = f.read()
-    
-    # Start with project instructions
-    context = f"{instructions}\n\n"
-    context += "Here are some journal entries that provide additional context for our conversation:\n\n"
-    
+    """Create a system prompt that includes the content of markdown files."""
+    base_prompt = "You are Claude, an AI assistant. You have access to the following journal entries:\n\n"
     for page in pages:
-        context += f"=== {page['filename']} ===\n{page['content']}\n\n"
-    
-    context += "\nPlease use this context to inform your responses. You can reference specific entries when relevant."
-    return context
+        base_prompt += f"File: {page['filename']}\n{page['content']}\n\n"
+    base_prompt += "\nPlease use this information to help answer questions. If you reference any specific entries, mention them by name."
+    return base_prompt
+
+def format_message(role, content):
+    """Format a message with markdown support."""
+    if role == "user":
+        return Panel(Markdown(content), style="green", title="You")
+    else:
+        return Panel(Markdown(content), style="blue", title="Claude")
+
+def print_welcome_message():
+    """Print a welcome message with instructions."""
+    welcome_md = """
+# Welcome to the Chat Interface
+
+Available commands:
+- `exit`: Exit the chat
+- `clear`: Clear the chat history
+- `help`: Show this help message
+- `sync`: Sync latest pages from Notion
+
+Your messages support markdown formatting!
+"""
+    console.print(Markdown(welcome_md))
+
+def sync_notion_pages():
+    """Sync pages from Notion."""
+    try:
+        import subprocess
+        console.print("[info]Syncing pages from Notion...[/info]")
+        result = subprocess.run(['python', 'get-notion-database.py'], 
+                              capture_output=True, 
+                              text=True)
+        if result.returncode == 0:
+            console.print("[info]Sync completed successfully![/info]")
+            return True
+        else:
+            console.print(f"[error]Error during sync: {result.stderr}[/error]")
+            return False
+    except Exception as e:
+        console.print(f"[error]Error running sync: {str(e)}[/error]")
+        return False
 
 def chat():
-    """Main chat loop."""
-    # Read markdown files for context
-    print("Loading journal entries...")
+    """Main chat loop with markdown support."""
+    # Load journal entries
     pages = read_markdown_files()
-    print(f"Loaded {len(pages)} journal entries")
-    
-    # Create system prompt with context
+    console.print(f"[info]Loaded {len(pages)} journal entries[/info]")
+
+    # Create the system prompt
     system_prompt = create_system_prompt(pages)
-    
-    # Initialize conversation history
+
+    # Print welcome message
+    print_welcome_message()
+
+    # Initialize conversation history (without system message)
     messages = []
-    
-    print("\nWelcome to Claude Chat! Type 'exit' to quit, 'clear' to start a new conversation, 'sync' to refresh from Notion.")
-    print("=" * 80)
-    
+
     while True:
         try:
             # Get user input
-            user_input = session.prompt(
-                "\nYou: ",
-                style=style,
-                auto_suggest=AutoSuggestFromHistory(),
-                completer=WordCompleter(['exit', 'clear', 'help', 'sync'])
-            )
-            
-            # Handle special commands
+            user_input = session.prompt(HTML('<style fg="green">You: </style>')).strip()
+
+            # Handle commands
             if user_input.lower() == 'exit':
-                print("\nGoodbye!")
+                console.print("[info]Goodbye![/info]")
                 break
             elif user_input.lower() == 'clear':
                 messages = []
-                print("\nConversation cleared!")
+                console.print("[info]Chat history cleared[/info]")
                 continue
             elif user_input.lower() == 'help':
-                print("\nAvailable commands:")
-                print("- exit: Exit the chat")
-                print("- clear: Clear conversation history")
-                print("- sync: Refresh content from Notion")
-                print("- help: Show this help message")
+                print_welcome_message()
                 continue
             elif user_input.lower() == 'sync':
-                print("\nSyncing with Notion...")
-                try:
-                    # Run the Notion sync script
-                    import subprocess
-                    result = subprocess.run(['python', 'get-notion-database.py'], 
-                                         capture_output=True, 
-                                         text=True)
-                    
-                    if result.returncode == 0:
-                        # Reload markdown files
-                        pages = read_markdown_files()
-                        system_prompt = create_system_prompt(pages)
-                        print(f"Successfully synced {len(pages)} journal entries")
-                        print("=" * 80)
-                    else:
-                        print("Error syncing with Notion:")
-                        print(result.stderr)
-                except Exception as e:
-                    print(f"Error during sync: {str(e)}")
+                if sync_notion_pages():
+                    # Reload pages and update system prompt
+                    pages = read_markdown_files()
+                    system_prompt = create_system_prompt(pages)
+                    messages = []
+                    console.print("[info]Chat context updated with new pages[/info]")
                 continue
-            
+
             # Add user message to history
             messages.append({"role": "user", "content": user_input})
             
+            # Display user message with markdown formatting
+            console.print(format_message("user", user_input))
+
             # Get Claude's response
             response = client.messages.create(
                 model="claude-3-7-sonnet-20250219",
-                max_tokens=4000,
+                max_tokens=4096,
+                system=system_prompt,  # Pass system prompt as a top-level parameter
                 messages=messages,
-                system=system_prompt
+                temperature=0.7,
             )
+
+            # Get the response content
+            assistant_message = response.content[0].text
+
+            # Add assistant message to history
+            messages.append({"role": "assistant", "content": assistant_message})
             
-            # Add Claude's response to history
-            messages.append({"role": "assistant", "content": response.content[0].text})
-            
-            # Print Claude's response
-            print("\nClaude:", response.content[0].text)
-            
+            # Display assistant message with markdown formatting
+            console.print(format_message("assistant", assistant_message))
+
         except KeyboardInterrupt:
+            console.print("\n[info]Use 'exit' to quit[/info]")
             continue
-        except EOFError:
-            break
         except Exception as e:
-            print(f"\nError: {str(e)}")
+            console.print(f"[error]Error: {str(e)}[/error]")
+            continue
 
 if __name__ == "__main__":
     chat() 
