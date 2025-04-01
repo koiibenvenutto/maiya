@@ -26,15 +26,15 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Global variable to track which API is being used
 current_api = "anthropic"
 
-# Initialize Rich console with a custom theme
+# Initialize Rich console with a custom theme and width limit
 custom_theme = Theme({
     "info": "cyan",
     "warning": "yellow",
     "error": "red",
     "user": "green",
-    "assistant": "blue",
+    "assistant": "white",
 })
-console = Console(theme=custom_theme)
+console = Console(theme=custom_theme, width=80)  # Set max width to 80 characters
 
 # Create a session for the prompt
 session = PromptSession(history=FileHistory('.chat_history'))
@@ -61,20 +61,37 @@ def read_markdown_files(directory="notion-pages"):
                 console.print(f"[error]Error reading {file}: {str(e)}[/error]")
     return pages
 
-def create_system_prompt(pages):
-    """Create a system prompt that includes the content of markdown files."""
-    base_prompt = "You are Claude, an AI assistant. You have access to the following journal entries:\n\n"
-    for page in pages:
-        base_prompt += f"File: {page['filename']}\n{page['content']}\n\n"
+def create_system_prompt(pages, for_api="anthropic"):
+    """Create a system prompt that includes the content of markdown files.
+    Limits content based on API to prevent token limit issues."""
+    base_prompt = ""
+    
+    if for_api == "anthropic":
+        base_prompt = "You are Claude, an AI assistant. You have access to the following journal entries:\n\n"
+        # Use all pages for Claude's larger context window
+        for page in pages:
+            base_prompt += f"File: {page['filename']}\n{page['content']}\n\n"
+    else:  # OpenAI has more limited context
+        base_prompt = "You are an AI assistant. You have access to the following recent journal entries:\n\n"
+        # Sort pages by most recent first (assuming they contain dates)
+        # Try to use only the most recent 5 entries to stay within token limits
+        sorted_pages = sorted(pages, key=lambda x: x['filename'], reverse=True)[:5]
+        for page in sorted_pages:
+            # Further truncate content if needed
+            content = page['content']
+            if len(content) > 2000:  # Arbitrary limit to prevent token overflows
+                content = content[:2000] + "... (content truncated)"
+            base_prompt += f"File: {page['filename']}\n{content}\n\n"
+    
     base_prompt += "\nPlease use this information to help answer questions. If you reference any specific entries, mention them by name."
     return base_prompt
 
 def format_message(role, content):
     """Format a message with markdown support."""
     if role == "user":
-        return Panel(Markdown(content), style="green", title="You")
+        return Panel(Markdown(content), style="green", title="You", width=80)
     else:
-        return Panel(Markdown(content), style="blue", title="Claude")
+        return Panel(Markdown(content), style="white", title="Assistant", width=80)
 
 def print_welcome_message():
     """Print welcome message with available commands."""
@@ -87,17 +104,20 @@ def print_welcome_message():
         "- [green]sync[/green]: Sync Notion pages\n"
         f"- [green]switch[/green]: Switch between Anthropic and OpenAI (currently using {current_api})",
         title="Help",
-        border_style="cyan"
+        border_style="cyan",
+        width=80
     ))
 
 def switch_api():
-    """Switch between Anthropic and OpenAI APIs."""
+    """Switch between Anthropic and OpenAI APIs and set the API_TYPE environment variable."""
     global current_api
     if current_api == "anthropic":
         current_api = "openai"
+        os.environ["API_TYPE"] = "openai"
         console.print("[info]Switched to OpenAI[/info]")
     else:
         current_api = "anthropic"
+        os.environ["API_TYPE"] = "anthropic"
         console.print("[info]Switched to Anthropic[/info]")
 
 def sync_notion_pages():
@@ -124,8 +144,9 @@ def chat():
     pages = read_markdown_files()
     console.print(f"[info]Loaded {len(pages)} journal entries[/info]")
 
-    # Create the system prompt
-    system_prompt = create_system_prompt(pages)
+    # Create the system prompts for both APIs
+    anthropic_system_prompt = create_system_prompt(pages, "anthropic")
+    openai_system_prompt = create_system_prompt(pages, "openai")
 
     # Print welcome message
     print_welcome_message()
@@ -151,37 +172,40 @@ def chat():
                 continue
             elif user_input.lower() == 'sync':
                 if sync_notion_pages():
-                    # Reload pages and update system prompt
+                    # Reload pages and update system prompts
                     pages = read_markdown_files()
-                    system_prompt = create_system_prompt(pages)
+                    anthropic_system_prompt = create_system_prompt(pages, "anthropic")
+                    openai_system_prompt = create_system_prompt(pages, "openai")
                     messages = []
                     console.print("[info]Chat context updated with new pages[/info]")
                 continue
             elif user_input.lower() == 'switch':
                 switch_api()
+                # Clear messages when switching to prevent context overflow
+                messages = []
+                console.print("[info]Chat history cleared due to API switch[/info]")
                 print_welcome_message()
                 continue
 
             # Add user message to history
             messages.append({"role": "user", "content": user_input})
-            
-            # Display user message with markdown formatting
-            console.print(format_message("user", user_input))
 
             # Get response based on current API
             if current_api == "anthropic":
                 response = anthropic_client.messages.create(
                     model="claude-3-7-sonnet-20250219",
                     max_tokens=4096,
-                    system=system_prompt,
+                    system=anthropic_system_prompt,
                     messages=messages,
                     temperature=0.7,
                 )
                 assistant_message = response.content[0].text
             else:  # OpenAI
+                # Limit message history for OpenAI to last 5 messages to prevent context overflow
+                recent_messages = messages[-10:] if len(messages) > 10 else messages
                 response = openai_client.chat.completions.create(
                     model="gpt-4-turbo-preview",
-                    messages=[{"role": "system", "content": system_prompt}] + messages,
+                    messages=[{"role": "system", "content": openai_system_prompt}] + recent_messages,
                     temperature=0.7,
                 )
                 assistant_message = response.choices[0].message.content

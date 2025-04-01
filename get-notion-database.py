@@ -6,6 +6,7 @@ import json
 import asyncio
 from datetime import datetime, timezone, timedelta
 import glob
+import requests
 
 # Load environment variables from .env file
 load_dotenv()
@@ -64,7 +65,7 @@ def get_page_title(page_id):
 
 
 def get_page_content(page_id):
-    """Fetch all blocks from a page efficiently."""
+    """Fetch all blocks from a page synchronously."""
     blocks = []
     has_more = True
     start_cursor = None
@@ -80,86 +81,6 @@ def get_page_content(page_id):
         if has_more:
             start_cursor = response["next_cursor"]
 
-    # Process nested blocks in parallel
-    import aiohttp
-    import ssl
-
-    # Create SSL context for macOS
-    ssl_context = ssl.create_default_context()
-    # TODO Figure out how to make sure I'm doing this securely at some point cuase right now the security is turned off ⬇️
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-
-    async def fetch_nested_blocks(block):
-        if block["has_children"]:
-            nested_blocks = await get_page_content_async(block["id"])
-            block["children"] = nested_blocks
-
-    async def get_page_content_async(page_id, max_retries=3):
-        """Get page content with retry logic."""
-        blocks = []
-        has_more = True
-        start_cursor = None
-
-        connector = aiohttp.TCPConnector(ssl=ssl_context, limit=10)  # Limit concurrent connections
-        async with aiohttp.ClientSession(connector=connector) as session:
-            while has_more:
-                url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-                params = {"page_size": 100}
-                if start_cursor:
-                    params["start_cursor"] = start_cursor
-
-                headers = {
-                    "Authorization": f"Bearer {notion_token}",
-                    "Notion-Version": "2022-06-28",
-                    "Content-Type": "application/json",
-                }
-
-                for attempt in range(max_retries):
-                    try:
-                        async with session.get(url, params=params, headers=headers) as response:
-                            if response.status == 504:
-                                if attempt < max_retries - 1:
-                                    print(f"Timeout fetching blocks for {page_id}, retrying...")
-                                    await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
-                                    continue
-                                else:
-                                    print(f"Failed to fetch blocks for {page_id} after {max_retries} attempts")
-                                    return blocks
-                            
-                            data = await response.json()
-                            blocks.extend(data["results"])
-                            has_more = data["has_more"]
-                            if has_more:
-                                start_cursor = data["next_cursor"]
-                            break
-                    except Exception as e:
-                        if attempt < max_retries - 1:
-                            print(f"Error fetching blocks for {page_id}, retrying... ({str(e)})")
-                            await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
-                            continue
-                        else:
-                            print(f"Failed to fetch blocks for {page_id} after {max_retries} attempts: {str(e)}")
-                            return blocks
-
-        # Fetch nested blocks in parallel with a limit
-        tasks = []
-        for block in blocks:
-            if block["has_children"]:
-                tasks.append(fetch_nested_blocks(block))
-        
-        # Process nested blocks in smaller batches to avoid overwhelming the API
-        batch_size = 5
-        for i in range(0, len(tasks), batch_size):
-            batch = tasks[i:i + batch_size]
-            if batch:
-                await asyncio.gather(*batch)
-                await asyncio.sleep(0.5)  # Small delay between batches
-
-        return blocks
-
-    # Run the async function
-    blocks = asyncio.run(get_page_content_async(page_id))
     return blocks
 
 
@@ -339,10 +260,10 @@ def get_existing_page_ids():
             existing_ids.add(page_id)
     return existing_ids
 
-def get_date_filter():
-    """Get the date filter for the last 30 days."""
-    thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
-    return {"property": "Date", "date": {"on_or_after": thirty_days_ago}}
+def get_date_filter(days=30):
+    """Get the date filter for the specified number of days."""
+    days_ago = (datetime.now() - timedelta(days=days)).isoformat()
+    return {"property": "Date", "date": {"on_or_after": days_ago}}
 
 def cleanup_old_pages():
     """Remove markdown files for pages older than 30 days."""
@@ -366,7 +287,7 @@ def cleanup_old_pages():
         print(f"\nCleaned up {removed_count} old files")
     return removed_count
 
-async def main():
+def main():
     # Get last sync time
     last_sync = get_last_sync_time()
     print(f"Last sync time: {last_sync if last_sync else 'Never'}")
@@ -376,9 +297,15 @@ async def main():
     print(f"Found {len(existing_page_ids)} existing pages")
     
     # Query the database for all pages from the last 60 days
+    current_api = os.getenv("API_TYPE")
+    if current_api == "openai":
+        date_filter = get_date_filter(days=7)
+    else:
+        date_filter = get_date_filter(days=30)
+    
     database = notion.databases.query(
         database_id="259700448ad145849e67fa1040a0e120",
-        filter=get_date_filter(),
+        filter=date_filter,
     )
     
     # Get all page IDs
@@ -387,73 +314,21 @@ async def main():
     # Find missing pages
     missing_page_ids = [pid for pid in all_page_ids if pid not in existing_page_ids]
     
-    # For existing pages, check their last_edited_time in parallel
-    async def check_page_updates():
-        updated_page_ids = []
-        tasks = []
-        
-        for page_id in existing_page_ids:
-            tasks.append(check_page_update(page_id))
-        
-        # Process in batches of 10 to avoid overwhelming the API
-        batch_size = 10
-        for i in range(0, len(tasks), batch_size):
-            batch = tasks[i:i + batch_size]
-            if batch:
-                results = await asyncio.gather(*batch, return_exceptions=True)
-                for result in results:
-                    if isinstance(result, str):  # If it's a page ID
-                        updated_page_ids.append(result)
-                await asyncio.sleep(0.5)  # Small delay between batches
-        
-        return updated_page_ids
-    
-    async def check_page_update(page_id):
-        try:
-            page = notion.pages.retrieve(page_id=page_id)
-            last_edited = datetime.fromisoformat(page["last_edited_time"].replace("Z", "+00:00"))
-            if last_sync and last_edited > last_sync:
-                return page_id
-        except Exception as e:
-            print(f"Error checking last edited time for page {page_id}: {str(e)}")
-        return None
-    
-    # Run the async check for updates
-    updated_page_ids = await check_page_updates()
-    
     # Combine updated and missing pages
-    pages_to_sync = list(set(updated_page_ids + missing_page_ids))
+    pages_to_sync = list(set(missing_page_ids))
     
     if not pages_to_sync:
         print("No pages to sync.")
     else:
         print(f"\nFound {len(pages_to_sync)} pages to sync:")
-        if updated_page_ids:
-            print(f"- {len(updated_page_ids)} updated pages")
         if missing_page_ids:
             print(f"- {len(missing_page_ids)} missing pages")
         
-        # Process pages in parallel batches
-        async def process_pages():
-            tasks = []
-            for page_id in pages_to_sync:
-                tasks.append(asyncio.create_task(process_page(page_id)))
-            
-            # Process in batches of 5
-            batch_size = 5
-            for i in range(0, len(tasks), batch_size):
-                batch = tasks[i:i + batch_size]
-                if batch:
-                    await asyncio.gather(*batch)
-                    await asyncio.sleep(0.5)
-        
-        async def process_page(page_id):
+        for page_id in pages_to_sync:
             print(f"\nProcessing page: {page_id}")
             markdown_content = get_page_markdown(page_id)
             save_page_to_file(page_id, markdown_content)
             print("-" * 80)
-        
-        await process_pages()
     
     # Clean up old pages
     cleanup_old_pages()
@@ -464,4 +339,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
