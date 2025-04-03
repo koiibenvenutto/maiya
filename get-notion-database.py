@@ -64,24 +64,82 @@ def get_page_title(page_id):
     return "Untitled"
 
 
-def get_page_content(page_id):
-    """Fetch all blocks from a page synchronously."""
+def get_block_content(block_id):
+    """Fetch all blocks from a page or block including nested blocks."""
     blocks = []
     has_more = True
     start_cursor = None
 
     while has_more:
         response = notion.blocks.children.list(
-            block_id=page_id,
+            block_id=block_id,
             start_cursor=start_cursor,
             page_size=100,  # Get maximum blocks per request
         )
-        blocks.extend(response["results"])
+        new_blocks = response["results"]
+        blocks.extend(new_blocks)
         has_more = response["has_more"]
         if has_more:
             start_cursor = response["next_cursor"]
 
-    return blocks
+    # Process nested blocks recursively
+    def process_block(block):
+        block_type = block["type"]
+        print(f"Block ID: {block['id']}, Type: {block_type}")  # Debug log for every block
+        
+        # Handle synced blocks
+        if block_type == "synced_block":
+            synced_from = block["synced_block"].get("synced_from")
+            if synced_from is None:
+                # This is an original synced block - process its children normally
+                print(f"Found original synced block {block['id']}")
+            else:
+                # This is a duplicate synced block - get the original block's content
+                original_block_id = synced_from["block_id"]
+                print(f"Found duplicate synced block {block['id']}, using original block {original_block_id}")
+                # Get the original block's content
+                original_block = notion.blocks.retrieve(block_id=original_block_id)
+                # Process the original block instead
+                return process_block(original_block)
+        
+        if block.get("has_children"):
+            try:
+                # Get nested blocks directly using blocks.children.list
+                nested_blocks = []
+                has_more = True
+                start_cursor = None
+                
+                while has_more:
+                    response = notion.blocks.children.list(
+                        block_id=block["id"],
+                        start_cursor=start_cursor,
+                        page_size=100
+                    )
+                    new_nested_blocks = response["results"]
+                    
+                    # Process each nested block recursively
+                    processed_nested_blocks = []
+                    for nested_block in new_nested_blocks:
+                        processed_nested_blocks.append(process_block(nested_block))
+                    
+                    nested_blocks.extend(processed_nested_blocks)
+                    has_more = response["has_more"]
+                    if has_more:
+                        start_cursor = response["next_cursor"]
+                
+                block["children"] = nested_blocks
+            except Exception as e:
+                print(f"Error fetching nested blocks for {block['id']}: {str(e)}")
+        return block
+
+    # Process all blocks that have children
+    processed_blocks = []
+    for i, block in enumerate(blocks, 1):
+        processed_blocks.append(process_block(block))
+        if i % 10 == 0:  # Print progress every 10 blocks
+            print(f"Processed {i}/{len(blocks)} blocks")
+
+    return processed_blocks
 
 
 def block_to_markdown(block, level=0):
@@ -91,132 +149,117 @@ def block_to_markdown(block, level=0):
     markdown = ""
     indent = "    " * level
 
+    # Debug logging for every block
+    print(f"Converting block ID: {block['id']}, Type: {block_type}")
+
     try:
-        if block_type == "paragraph":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
-            markdown = f"{indent}{text}\n\n"
-        elif block_type == "heading_1":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
-            markdown = f"# {text}\n\n"
+        # Extract text content from any block type
+        text = "".join(
+            [
+                span.get("text", {}).get("content", "")
+                for span in content.get("rich_text", [])
+            ]
+        )
+
+        # Format the block based on its type and state
+        if block_type == "heading_1":
+            markdown = f"{indent}# {text}"
         elif block_type == "heading_2":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
-            markdown = f"## {text}\n\n"
+            markdown = f"{indent}## {text}"
         elif block_type == "heading_3":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
-            markdown = f"### {text}\n\n"
+            markdown = f"{indent}### {text}"
         elif block_type == "bulleted_list_item":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
-            markdown = f"{indent}- {text}\n"
-            if block.get("children"):
-                for child in block["children"]:
-                    markdown += block_to_markdown(child, level + 1)
+            markdown = f"{indent}- {text}"
         elif block_type == "numbered_list_item":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
-            markdown = f"{indent}1. {text}\n"
-            if block.get("children"):
-                for child in block["children"]:
-                    markdown += block_to_markdown(child, level + 1)
-        elif block_type == "code":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
-            language = content.get("language", "")
-            markdown = f"```{language}\n{text}\n```\n\n"
+            markdown = f"{indent}1. {text}"
         elif block_type == "to_do":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
             checked = "x" if content.get("checked", False) else " "
-            markdown = f"{indent}- [{checked}] {text}\n"
-            if block.get("children"):
-                for child in block["children"]:
-                    markdown += block_to_markdown(child, level + 1)
+            markdown = f"{indent}- [{checked}] {text}"
         elif block_type == "toggle":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
-            markdown = f"{indent}<details>\n{indent}<summary>{text}</summary>\n\n"
-            if block.get("children"):
-                for child in block["children"]:
-                    markdown += block_to_markdown(child, level + 1)
-            markdown += f"{indent}</details>\n\n"
-        elif block_type == "divider":
-            markdown = "---\n\n"
+            # Preserve toggle state in metadata
+            is_toggled = content.get("is_toggled", False)
+            markdown = f"{indent}<details{' open' if is_toggled else ''}>\n{indent}    <summary>{text}</summary>"
         elif block_type == "quote":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
-            markdown = f"{indent}> {text}\n"
+            # Handle block quotes with proper indentation
+            markdown = f"{indent}> {text}"
+            # If the quote has children, they should be indented further
             if block.get("children"):
+                child_indent = indent + "> "
+                child_markdowns = []
                 for child in block["children"]:
-                    child_md = block_to_markdown(child, level + 1)
-                    markdown += f"{indent}> " + child_md.replace("\n", f"\n{indent}> ")
-            markdown += "\n"
+                    child_markdown = block_to_markdown(child, level + 1)
+                    if child_markdown:  # Only add if there's actual content
+                        # Add quote marker to each line of child content
+                        child_markdown = "\n".join([f"{child_indent}{line}" for line in child_markdown.split("\n")])
+                        child_markdowns.append(child_markdown)
+                if child_markdowns:  # Only add newline if there are children
+                    markdown += "\n" + "\n".join(child_markdowns)
         elif block_type == "callout":
-            text = "".join(
-                [
-                    span.get("text", {}).get("content", "")
-                    for span in content.get("rich_text", [])
-                ]
-            )
+            # Get callout properties
             color = content.get("color", "default")
-            markdown = f"{indent}> [!{color}]\n{indent}> {text}\n"
+            icon = content.get("icon", {}).get("emoji", "ℹ️")
+            
+            # Format the callout with icon and color
+            markdown = f"{indent}> [!{color} {icon}]\n{indent}> {text}"
+            
+            # Handle nested content in callouts
             if block.get("children"):
+                child_indent = indent + "> "
+                child_markdowns = []
                 for child in block["children"]:
-                    child_md = block_to_markdown(child, level + 1)
-                    markdown += f"{indent}> " + child_md.replace("\n", f"\n{indent}> ")
-            markdown += "\n"
+                    child_markdown = block_to_markdown(child, level + 1)
+                    if child_markdown:  # Only add if there's actual content
+                        # Add callout marker to each line of child content
+                        child_markdown = "\n".join([f"{child_indent}{line}" for line in child_markdown.split("\n")])
+                        child_markdowns.append(child_markdown)
+                if child_markdowns:  # Only add newline if there are children
+                    markdown += "\n" + "\n".join(child_markdowns)
+        elif block_type == "code":
+            # Get code block properties
+            language = content.get("language", "")
+            caption = content.get("caption", [{}])[0].get("text", {}).get("content", "")
+            
+            # Format the code block with language specification
+            markdown = f"{indent}```{language}\n"
+            
+            # Add the code content with proper indentation
+            code_lines = text.split("\n")
+            for line in code_lines:
+                markdown += f"{indent}{line}\n"
+            
+            # Close the code block
+            markdown += f"{indent}```"
+            
+            # Add caption if present
+            if caption:
+                markdown += f"\n{indent}*{caption}*"
+        elif block_type == "divider":
+            markdown = f"{indent}---"
         elif block_type == "image":
             # Skip image blocks since they won't be accessible to AI models
             return ""
         else:
-            # Handle any nested blocks even for unknown block types
-            markdown = ""
-            if block.get("children"):
-                for child in block["children"]:
-                    markdown += block_to_markdown(child, level + 1)
+            # Default case for paragraph and unknown types
+            markdown = f"{indent}{text}"
+
+        # Process children for any block type except quotes, callouts, and code blocks (already handled above)
+        if block.get("children") and block_type not in ["quote", "callout", "code"]:
+            child_markdowns = []
+            for child in block["children"]:
+                child_markdown = block_to_markdown(child, level + 1)
+                if child_markdown:  # Only add if there's actual content
+                    child_markdowns.append(child_markdown)
+            
+            if child_markdowns:  # Only add newline if there are children
+                markdown += "\n" + "\n".join(child_markdowns)
+
+        # Close toggle blocks
+        if block_type == "toggle":
+            markdown += f"\n{indent}</details>"
+
+        # Only add a newline if there's actual content and it's not a child block
+        if markdown and level == 0:
+            markdown += "\n"
 
         return markdown
     except Exception as e:
@@ -226,10 +269,15 @@ def block_to_markdown(block, level=0):
 
 def get_page_markdown(page_id):
     """Get all blocks from a page and convert them to markdown."""
-    blocks = get_page_content(page_id)
+    print(f"\nProcessing blocks for page {page_id}")
+    blocks = get_block_content(page_id)
     markdown = ""
-    for block in blocks:
-        markdown += block_to_markdown(block)
+    for i, block in enumerate(blocks, 1):
+        block_markdown = block_to_markdown(block)
+        if block_markdown:
+            markdown += block_markdown
+        if i % 10 == 0:  # Print progress every 10 blocks
+            print(f"Converted {i}/{len(blocks)} blocks to markdown")
     return markdown
 
 
@@ -296,42 +344,18 @@ def main():
     existing_page_ids = get_existing_page_ids()
     print(f"Found {len(existing_page_ids)} existing pages")
     
-    # Query the database for all pages from the last 60 days
-    current_api = os.getenv("API_TYPE")
-    if current_api == "openai":
-        date_filter = get_date_filter(days=7)
-    else:
-        date_filter = get_date_filter(days=30)
+    # Only sync the specific page we want
+    target_page_id = "1cad13396967802f898be5165518f20f"
+    pages_to_sync = [target_page_id]
     
-    database = notion.databases.query(
-        database_id="259700448ad145849e67fa1040a0e120",
-        filter=date_filter,
-    )
+    print(f"\nSyncing specific page: {target_page_id}")
     
-    # Get all page IDs
-    all_page_ids = [page["id"] for page in database["results"]]
-    
-    # Find missing pages
-    missing_page_ids = [pid for pid in all_page_ids if pid not in existing_page_ids]
-    
-    # Combine updated and missing pages
-    pages_to_sync = list(set(missing_page_ids))
-    
-    if not pages_to_sync:
-        print("No pages to sync.")
-    else:
-        print(f"\nFound {len(pages_to_sync)} pages to sync:")
-        if missing_page_ids:
-            print(f"- {len(missing_page_ids)} missing pages")
-        
-        for page_id in pages_to_sync:
-            print(f"\nProcessing page: {page_id}")
-            markdown_content = get_page_markdown(page_id)
-            save_page_to_file(page_id, markdown_content)
-            print("-" * 80)
-    
-    # Clean up old pages
-    cleanup_old_pages()
+    for i, page_id in enumerate(pages_to_sync, 1):
+        print(f"\n[{i}/{len(pages_to_sync)}] Processing page: {page_id}")
+        markdown_content = get_page_markdown(page_id)
+        save_page_to_file(page_id, markdown_content)
+        print(f"[{i}/{len(pages_to_sync)}] ✓ Completed page: {page_id}")
+        print("-" * 80)
     
     # Update last sync time after successful sync
     update_last_sync_time()
