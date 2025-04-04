@@ -14,7 +14,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.theme import Theme
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Load environment variables
 load_dotenv()
@@ -32,7 +32,7 @@ custom_theme = Theme({
     "warning": "yellow",
     "error": "red",
     "user": "green",
-    "assistant": "white",
+    "assistant": "magenta",
 })
 console = Console(theme=custom_theme, width=80)  # Set max width to 80 characters
 
@@ -43,8 +43,8 @@ session = PromptSession(history=FileHistory('.chat_history'))
 style = Style.from_dict({
     'prompt': 'ansicyan bold',
     'input': 'ansiwhite',
-    'assistant': 'ansigreen',
-    'user': 'ansiblue',
+    'assistant': 'magenta',
+    'user': 'ansigreen',
 })
 
 def read_markdown_files(directory="notion-pages"):
@@ -56,42 +56,94 @@ def read_markdown_files(directory="notion-pages"):
                 with open(file, 'r', encoding='utf-8') as f:
                     content = f.read()
                     filename = os.path.basename(file)
-                    pages.append({"filename": filename, "content": content})
+                    
+                    # Extract date from filename (format: YYYY-MM-DD-HHMM-SS page_id.md)
+                    date_str = None
+                    try:
+                        # Extract the date part (YYYY-MM-DD-HHMM-SS)
+                        date_part = filename.split()[0]
+                        # Parse the date
+                        date_str = date_part
+                        # Convert to datetime for sorting
+                        date_obj = datetime.strptime(date_part, "%Y-%m-%d-%H%M-%S")
+                    except (ValueError, IndexError):
+                        # If date extraction fails, use file modification time
+                        date_obj = datetime.fromtimestamp(os.path.getmtime(file))
+                        date_str = date_obj.strftime("%Y-%m-%d")
+                    
+                    pages.append({
+                        "filename": filename,
+                        "content": content,
+                        "date": date_str,
+                        "date_obj": date_obj
+                    })
             except Exception as e:
                 console.print(f"[error]Error reading {file}: {str(e)}[/error]")
+    
+    # Sort pages by date (newest first)
+    pages.sort(key=lambda x: x["date_obj"], reverse=True)
+    
     return pages
+
+# Load the prompt configuration from prompt.md
+with open('prompt.md', 'r') as f:
+    prompt_md_content = f.read()
+
+# Extract system prompts and project instructions from the markdown content
+# Assuming the markdown file is structured with headings, we can split by sections
+sections = prompt_md_content.split('\n## ')
+
+# Extract the system prompt section
+system_prompt_section = next((s for s in sections if s.startswith('System Prompt')), '')
+
+# Extract the project instructions section
+project_instructions_section = next((s for s in sections if s.startswith('Project Purpose')), '')
+
+# Use the system prompt section for both Anthropic and OpenAI
+anthropic_system_prompt_template = system_prompt_section
+openai_system_prompt_template = system_prompt_section
+
+# Use the project instructions section
+project_instructions = project_instructions_section
 
 def create_system_prompt(pages, for_api="anthropic"):
     """Create a system prompt that includes the content of markdown files.
     Limits content based on API to prevent token limit issues."""
-    base_prompt = ""
+    # Get today's date
+    today = datetime.now()
+    today_str = today.strftime("%Y-%m-%d")
+    
+    # Calculate the date 5 days ago
+    five_days_ago = today - timedelta(days=5)
+    
+    # Filter pages to include only those from the last 5 days
+    recent_pages = [page for page in pages if page['date_obj'] >= five_days_ago]
     
     if for_api == "anthropic":
-        base_prompt = "You are Claude, an AI assistant. You have access to the following journal entries:\n\n"
-        # Use all pages for Claude's larger context window
-        for page in pages:
-            base_prompt += f"File: {page['filename']}\n{page['content']}\n\n"
+        base_prompt = anthropic_system_prompt_template.format(today=today_str)
+        # Use filtered pages for Claude's context window
+        for page in recent_pages:
+            base_prompt += f"Entry from {page['date']}:\n{page['content']}\n\n"
     else:  # OpenAI has more limited context
-        base_prompt = "You are an AI assistant. You have access to the following recent journal entries:\n\n"
-        # Sort pages by most recent first (assuming they contain dates)
-        # Try to use only the most recent 5 entries to stay within token limits
-        sorted_pages = sorted(pages, key=lambda x: x['filename'], reverse=True)[:5]
-        for page in sorted_pages:
+        base_prompt = openai_system_prompt_template.format(today=today_str)
+        # Use filtered pages for OpenAI's context window
+        for page in recent_pages[:5]:  # Limit to the most recent 5 entries
             # Further truncate content if needed
             content = page['content']
             if len(content) > 2000:  # Arbitrary limit to prevent token overflows
                 content = content[:2000] + "... (content truncated)"
-            base_prompt += f"File: {page['filename']}\n{content}\n\n"
+            base_prompt += f"Entry from {page['date']}:\n{content}\n\n"
     
-    base_prompt += "\nPlease use this information to help answer questions. If you reference any specific entries, mention them by name."
+    base_prompt += f"\nRemember: Today is {today_str}. Always reference the correct dates from the filenames when discussing entries."
     return base_prompt
 
 def format_message(role, content):
-    """Format a message with markdown support."""
+    """Format a message with markdown support and color coding."""
     if role == "user":
-        return Panel(Markdown(content), style="green", title="You", width=80)
+        console.rule()
     else:
-        return Panel(Markdown(content), style="white", title="Assistant", width=80)
+        console.print(f"[white]{content}[/white]")
+        console.rule()
 
 def print_welcome_message():
     """Print welcome message with available commands."""
@@ -124,10 +176,64 @@ def sync_notion_pages():
     """Sync pages from Notion."""
     try:
         import subprocess
-        console.print("[info]Syncing pages from Notion...[/info]")
-        result = subprocess.run(['python', 'get-notion-database.py'], 
+        import json
+        import os
+        
+        # Get the last used number of days from the sync_config.json file
+        config_file = "sync_config.json"
+        last_days = 1  # Default to 1 day if no config exists
+        
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                    last_days = config.get('last_days', 1)
+            except Exception:
+                pass
+        
+        # Ask the user for the number of days
+        console.print("[info]How many days back would you like to sync?[/info]")
+        console.print(f"[info]Press Enter to use the last value ({last_days} days) or type a number.[/info]")
+        
+        user_input = session.prompt(HTML('<style fg="green">Days: </style>')).strip()
+        
+        # Use the user input or default to the last used value
+        if user_input:
+            try:
+                days = int(user_input)
+                if days <= 0:
+                    console.print("[warning]Invalid input. Using default value.[/warning]")
+                    days = last_days
+            except ValueError:
+                console.print("[warning]Invalid input. Using default value.[/warning]")
+                days = last_days
+        else:
+            days = last_days
+        
+        # Save the new value to the sync_config.json file
+        # First read the existing file to preserve other settings
+        config_data = {}
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r') as f:
+                    config_data = json.load(f)
+            except Exception:
+                pass
+        
+        # Update the last_days value
+        config_data['last_days'] = days
+        
+        # Write the updated config back to the file
+        with open(config_file, 'w') as f:
+            json.dump(config_data, f)
+        
+        console.print(f"[info]Syncing pages from the last {days} days...[/info]")
+        
+        # Run the sync script with the days parameter
+        result = subprocess.run(['python', 'get-notion-database.py', '--days', str(days)], 
                               capture_output=True, 
                               text=True)
+        
         if result.returncode == 0:
             console.print("[info]Sync completed successfully![/info]")
             return True
@@ -190,6 +296,9 @@ def chat():
             # Add user message to history
             messages.append({"role": "user", "content": user_input})
 
+            # Display user message with markdown formatting and color coding
+            format_message("user", user_input)
+
             # Get response based on current API
             if current_api == "anthropic":
                 response = anthropic_client.messages.create(
@@ -213,8 +322,8 @@ def chat():
             # Add assistant message to history
             messages.append({"role": "assistant", "content": assistant_message})
             
-            # Display assistant message with markdown formatting
-            console.print(format_message("assistant", assistant_message))
+            # Display assistant message with markdown formatting and color coding
+            format_message("assistant", assistant_message)
 
         except KeyboardInterrupt:
             console.print("\n[info]Use 'exit' to quit[/info]")

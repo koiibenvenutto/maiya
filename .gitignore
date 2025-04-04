@@ -63,6 +63,6 @@ pids
 
 # Project specific
 notion-pages/
-last_sync.json
+sync_config.json
 .chat_history
 claude_project_id.txt

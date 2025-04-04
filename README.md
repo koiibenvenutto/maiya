@@ -66,7 +66,7 @@ Available commands:
 - `chat.py`: Terminal-based chat interface
 - `notion-pages/`: Directory containing markdown files
 - `.env`: Environment variables (not tracked in git)
-- `last_sync.json`: Tracks last successful sync time
+- `sync_config.json`: Tracks last successful sync time and configuration settings
 
 ## Notes
 
