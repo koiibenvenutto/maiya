@@ -154,70 +154,17 @@ def block_to_markdown(block, level=0):
 
     try:
         # Extract text content from any block type
-        text = "".join(
-            [
-                span.get("text", {}).get("content", "")
-                for span in content.get("rich_text", [])
-            ]
-        )
-
-        # Format the block based on its type and state
-        if block_type == "heading_1":
-            markdown = f"{indent}# {text}"
-        elif block_type == "heading_2":
-            markdown = f"{indent}## {text}"
-        elif block_type == "heading_3":
-            markdown = f"{indent}### {text}"
-        elif block_type == "bulleted_list_item":
-            markdown = f"{indent}- {text}"
-        elif block_type == "numbered_list_item":
-            markdown = f"{indent}1. {text}"
-        elif block_type == "to_do":
-            checked = "x" if content.get("checked", False) else " "
-            markdown = f"{indent}- [{checked}] {text}"
-        elif block_type == "toggle":
-            # Preserve toggle state in metadata
-            is_toggled = content.get("is_toggled", False)
-            markdown = f"{indent}<details{' open' if is_toggled else ''}>\n{indent}    <summary>{text}</summary>"
-        elif block_type == "quote":
-            # Handle block quotes with proper indentation
-            markdown = f"{indent}> {text}"
-            # If the quote has children, they should be indented further
-            if block.get("children"):
-                child_indent = indent + "> "
-                child_markdowns = []
-                for child in block["children"]:
-                    child_markdown = block_to_markdown(child, level + 1)
-                    if child_markdown:  # Only add if there's actual content
-                        # Add quote marker to each line of child content
-                        child_markdown = "\n".join([f"{child_indent}{line}" for line in child_markdown.split("\n")])
-                        child_markdowns.append(child_markdown)
-                if child_markdowns:  # Only add newline if there are children
-                    markdown += "\n" + "\n".join(child_markdowns)
-        elif block_type == "callout":
-            # Get callout properties
-            color = content.get("color", "default")
-            icon = content.get("icon", {}).get("emoji", "ℹ️")
+        if block_type == "code":
+            # For code blocks, get text from the code property's rich_text
+            text = "".join(
+                [
+                    span.get("text", {}).get("content", "")
+                    for span in content.get("rich_text", [])
+                ]
+            )
             
-            # Format the callout with icon and color
-            markdown = f"{indent}> [!{color} {icon}]\n{indent}> {text}"
-            
-            # Handle nested content in callouts
-            if block.get("children"):
-                child_indent = indent + "> "
-                child_markdowns = []
-                for child in block["children"]:
-                    child_markdown = block_to_markdown(child, level + 1)
-                    if child_markdown:  # Only add if there's actual content
-                        # Add callout marker to each line of child content
-                        child_markdown = "\n".join([f"{child_indent}{line}" for line in child_markdown.split("\n")])
-                        child_markdowns.append(child_markdown)
-                if child_markdowns:  # Only add newline if there are children
-                    markdown += "\n" + "\n".join(child_markdowns)
-        elif block_type == "code":
             # Get code block properties
             language = content.get("language", "")
-            caption = content.get("caption", [{}])[0].get("text", {}).get("content", "")
             
             # Format the code block with language specification
             markdown = f"{indent}```{language}\n"
@@ -228,19 +175,103 @@ def block_to_markdown(block, level=0):
                 markdown += f"{indent}{line}\n"
             
             # Close the code block
-            markdown += f"{indent}```"
+            markdown += f"{indent}```\n"  # Add line break after code block
             
-            # Add caption if present
-            if caption:
-                markdown += f"\n{indent}*{caption}*"
-        elif block_type == "divider":
-            markdown = f"{indent}---"
-        elif block_type == "image":
-            # Skip image blocks since they won't be accessible to AI models
-            return ""
+            # Add caption if present (safely handle empty caption array)
+            caption_text = ""
+            if content.get("caption"):
+                caption_text = "".join(
+                    [
+                        span.get("text", {}).get("content", "")
+                        for span in content["caption"]
+                    ]
+                )
+            if caption_text:
+                markdown += f"{indent}*{caption_text}*\n"  # Add line break after caption
         else:
-            # Default case for paragraph and unknown types
-            markdown = f"{indent}{text}"
+            # For other blocks, get text from the block's rich_text with formatting
+            text = ""
+            for span in content.get("rich_text", []):
+                # Get the text content
+                span_text = span.get("text", {}).get("content", "")
+                
+                # Apply formatting based on annotations
+                annotations = span.get("annotations", {})
+                
+                # Apply formatting in a specific order to avoid conflicts
+                if annotations.get("strikethrough", False):
+                    span_text = f"~~{span_text}~~"
+                if annotations.get("underline", False):
+                    span_text = f"<u>{span_text}</u>"
+                if annotations.get("italic", False):
+                    span_text = f"*{span_text}*"
+                if annotations.get("bold", False):
+                    span_text = f"**{span_text}**"
+                
+                # Add the formatted text
+                text += span_text
+
+            # Format the block based on its type and state
+            if block_type == "heading_1":
+                markdown = f"{indent}# {text}\n"  # Add line break after heading
+            elif block_type == "heading_2":
+                markdown = f"{indent}## {text}\n"  # Add line break after heading
+            elif block_type == "heading_3":
+                markdown = f"{indent}### {text}\n"  # Add line break after heading
+            elif block_type == "bulleted_list_item":
+                markdown = f"{indent}- {text}\n"  # Add line break after list item
+            elif block_type == "numbered_list_item":
+                markdown = f"{indent}1. {text}\n"  # Add line break after list item
+            elif block_type == "to_do":
+                checked = "x" if content.get("checked", False) else " "
+                markdown = f"{indent}- [{checked}] {text}\n"  # Add line break after to-do
+            elif block_type == "toggle":
+                # Preserve toggle state in metadata
+                is_toggled = content.get("is_toggled", False)
+                markdown = f"{indent}<details{' open' if is_toggled else ''}>\n{indent}    <summary>{text}</summary>\n"
+            elif block_type == "quote":
+                # Handle block quotes with proper indentation
+                markdown = f"{indent}> {text}\n"  # Add line break after quote
+                # If the quote has children, they should be indented further
+                if block.get("children"):
+                    child_indent = indent + "> "
+                    child_markdowns = []
+                    for child in block["children"]:
+                        child_markdown = block_to_markdown(child, level + 1)
+                        if child_markdown:  # Only add if there's actual content
+                            # Add quote marker to each line of child content
+                            child_markdown = "\n".join([f"{child_indent}{line}" for line in child_markdown.split("\n")])
+                            child_markdowns.append(child_markdown)
+                    if child_markdowns:  # Only add newline if there are children
+                        markdown += "\n".join(child_markdowns) + "\n"  # Add line break after children
+            elif block_type == "callout":
+                # Get callout properties
+                color = content.get("color", "default")
+                icon = content.get("icon", {}).get("emoji", "ℹ️")
+                
+                # Format the callout with icon and color
+                markdown = f"{indent}> [!{color} {icon}]\n{indent}> {text}\n"  # Add line break after callout
+                
+                # Handle nested content in callouts
+                if block.get("children"):
+                    child_indent = indent + "> "
+                    child_markdowns = []
+                    for child in block["children"]:
+                        child_markdown = block_to_markdown(child, level + 1)
+                        if child_markdown:  # Only add if there's actual content
+                            # Add callout marker to each line of child content
+                            child_markdown = "\n".join([f"{child_indent}{line}" for line in child_markdown.split("\n")])
+                            child_markdowns.append(child_markdown)
+                    if child_markdowns:  # Only add newline if there are children
+                        markdown += "\n".join(child_markdowns) + "\n"  # Add line break after children
+            elif block_type == "divider":
+                markdown = f"{indent}---\n"  # Add line break after divider
+            elif block_type == "image":
+                # Skip image blocks since they won't be accessible to AI models
+                return ""
+            else:
+                # Default case for paragraph and unknown types
+                markdown = f"{indent}{text}\n"  # Add line break after paragraph
 
         # Process children for any block type except quotes, callouts, and code blocks (already handled above)
         if block.get("children") and block_type not in ["quote", "callout", "code"]:
@@ -251,15 +282,18 @@ def block_to_markdown(block, level=0):
                     child_markdowns.append(child_markdown)
             
             if child_markdowns:  # Only add newline if there are children
-                markdown += "\n" + "\n".join(child_markdowns)
+                markdown += "\n".join(child_markdowns)  # Don't add extra newline here
 
         # Close toggle blocks
         if block_type == "toggle":
-            markdown += f"\n{indent}</details>"
+            markdown += f"{indent}</details>\n"  # Add line break after toggle
 
         # Only add a newline if there's actual content and it's not a child block
         if markdown and level == 0:
-            markdown += "\n"
+            # Clean up multiple consecutive newlines
+            markdown = re.sub(r'\n{3,}', '\n\n', markdown)
+            # Ensure there's exactly one newline at the end
+            markdown = markdown.rstrip() + '\n'
 
         return markdown
     except Exception as e:
@@ -278,6 +312,12 @@ def get_page_markdown(page_id):
             markdown += block_markdown
         if i % 10 == 0:  # Print progress every 10 blocks
             print(f"Converted {i}/{len(blocks)} blocks to markdown")
+    
+    # Clean up any remaining multiple consecutive newlines
+    markdown = re.sub(r'\n{3,}', '\n\n', markdown)
+    # Ensure there's exactly one newline at the end
+    markdown = markdown.rstrip() + '\n'
+    
     return markdown
 
 
