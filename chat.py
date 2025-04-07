@@ -26,15 +26,15 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Global variable to track which API is being used
 current_api = "anthropic"
 
-# Initialize Rich console with a custom theme and width limit
+# Initialize Rich console with a custom theme
 custom_theme = Theme({
     "info": "cyan",
     "warning": "yellow",
     "error": "red",
     "user": "green",
-    "assistant": "magenta",
+    "assistant": "white",
 })
-console = Console(theme=custom_theme, width=80)  # Set max width to 80 characters
+console = Console(theme=custom_theme)  # Remove max width to use default terminal width
 
 # Create a session for the prompt
 session = PromptSession(history=FileHistory('.chat_history'))
@@ -43,8 +43,8 @@ session = PromptSession(history=FileHistory('.chat_history'))
 style = Style.from_dict({
     'prompt': 'ansicyan bold',
     'input': 'ansiwhite',
-    'assistant': 'magenta',
-    'user': 'ansigreen',
+    'assistant': 'ansigreen',
+    'user': 'ansiblue',
 })
 
 def read_markdown_files(directory="notion-pages"):
@@ -113,11 +113,23 @@ def create_system_prompt(pages, for_api="anthropic"):
     today = datetime.now()
     today_str = today.strftime("%Y-%m-%d")
     
-    # Calculate the date 5 days ago
-    five_days_ago = today - timedelta(days=5)
+    # Read the last_days value from the config file
+    config_file = "sync_config.json"
+    last_days = 5  # Default to 5 days if no config exists
     
-    # Filter pages to include only those from the last 5 days
-    recent_pages = [page for page in pages if page['date_obj'] >= five_days_ago]
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+                last_days = config.get('last_days', 5)
+        except Exception:
+            pass
+    
+    # Calculate the date 'last_days' ago
+    days_ago = today - timedelta(days=last_days)
+    
+    # Filter pages to include only those from the last 'last_days' days
+    recent_pages = [page for page in pages if page['date_obj'] >= days_ago]
     
     if for_api == "anthropic":
         base_prompt = anthropic_system_prompt_template.format(today=today_str)
@@ -138,12 +150,11 @@ def create_system_prompt(pages, for_api="anthropic"):
     return base_prompt
 
 def format_message(role, content):
-    """Format a message with markdown support and color coding."""
+    """Format a message with markdown support."""
     if role == "user":
-        console.rule()
+        return Markdown(content)
     else:
-        console.print(f"[white]{content}[/white]")
-        console.rule()
+        return Markdown(content)
 
 def print_welcome_message():
     """Print welcome message with available commands."""
@@ -154,6 +165,7 @@ def print_welcome_message():
         "- [green]clear[/green]: Clear chat history\n"
         "- [green]help[/green]: Show this help message\n"
         "- [green]sync[/green]: Sync Notion pages\n"
+        "- [green]setdays[/green]: Set the number of days for AI access\n"
         f"- [green]switch[/green]: Switch between Anthropic and OpenAI (currently using {current_api})",
         title="Help",
         border_style="cyan",
@@ -244,6 +256,53 @@ def sync_notion_pages():
         console.print(f"[error]Error running sync: {str(e)}[/error]")
         return False
 
+# Function to set the number of days for AI access
+
+def set_days_for_access():
+    """Set the number of days in the past for AI access."""
+    config_file = "sync_config.json"
+    last_days = 5  # Default to 5 days if no config exists
+
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+                last_days = config.get('last_days', 5)
+        except Exception:
+            pass
+
+    console.print("[info]How many days back should the AI access entries for new chats?[/info]")
+    console.print(f"[info]Press Enter to use the last value ({last_days} days) or type a number.[/info]")
+
+    user_input = session.prompt(HTML('<style fg="green">Days: </style>')).strip()
+
+    if user_input:
+        try:
+            days = int(user_input)
+            if days <= 0:
+                console.print("[warning]Invalid input. Using default value.[/warning]")
+                days = last_days
+        except ValueError:
+            console.print("[warning]Invalid input. Using default value.[/warning]")
+            days = last_days
+    else:
+        days = last_days
+
+    config_data = {}
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config_data = json.load(f)
+        except Exception:
+            pass
+
+    config_data['last_days'] = days
+
+    with open(config_file, 'w') as f:
+        json.dump(config_data, f)
+
+    console.print(f"[info]AI will access entries from the last {days} days for new chats.[/info]")
+
 def chat():
     """Main chat loop with markdown support."""
     # Load journal entries
@@ -292,12 +351,12 @@ def chat():
                 console.print("[info]Chat history cleared due to API switch[/info]")
                 print_welcome_message()
                 continue
+            elif user_input.lower() == 'setdays':
+                set_days_for_access()
+                continue
 
             # Add user message to history
             messages.append({"role": "user", "content": user_input})
-
-            # Display user message with markdown formatting and color coding
-            format_message("user", user_input)
 
             # Get response based on current API
             if current_api == "anthropic":
@@ -322,8 +381,14 @@ def chat():
             # Add assistant message to history
             messages.append({"role": "assistant", "content": assistant_message})
             
-            # Display assistant message with markdown formatting and color coding
-            format_message("assistant", assistant_message)
+            # Display a horizontal rule before the assistant message
+            console.print("---")
+            
+            # Display assistant message with markdown formatting
+            console.print(format_message("assistant", assistant_message))
+
+            # Display a horizontal rule after the assistant message
+            console.print("---")
 
         except KeyboardInterrupt:
             console.print("\n[info]Use 'exit' to quit[/info]")
