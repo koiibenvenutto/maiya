@@ -1,0 +1,15 @@
+#!/usr/bin/env python
+"""
+Maia - Command line entry point for the Maia framework.
+"""
+import sys
+import os
+
+# Add the parent directory to the path to find the maia package
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import the main function from the CLI module
+from maia.cli import main
+
+if __name__ == "__main__":
+    main() 

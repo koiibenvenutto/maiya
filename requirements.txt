@@ -1,4 +1,26 @@
-notion-client==2.2.1
-python-dotenv==1.0.1
-prompt_toolkit==3.0.43
-rich==13.7.0 
+# Core dependencies
+notion-client==2.2.1  # Notion API client
+python-dotenv==1.0.1  # Environment variable management
+rich==13.7.0          # Rich text and formatting in terminal
+python-slugify>=7.0.0 # URL slug generation
+requests>=2.28.0      # HTTP client for APIs
+
+# CLI and terminal interface
+prompt_toolkit==3.0.43  # Command-line interface toolkit
+
+# AI Integration
+anthropic>=0.20.0    # Anthropic Claude API
+openai>=1.6.0        # OpenAI API
+
+# Async support
+aiohttp>=3.8.0   # Async HTTP client
+
+# Development dependencies
+pytest>=7.0.0    # Testing framework
+pytest-asyncio   # Async testing support
+black            # Code formatting
+isort            # Import sorting
+flake8           # Linting
+
+# Documentation
+sphinx           # Documentation generator 
