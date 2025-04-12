@@ -48,6 +48,55 @@ async def process_page(page_id: str, index: int, total: int):
     print(f"[{index}/{total}] ✓ Saved page to {filepath}")
     print("-" * 80)
 
+async def sync_notion_database(args):
+    """
+    Sync pages from a Notion database to local markdown files.
+    
+    Args:
+        args: Command line arguments
+    """
+    # Get database ID
+    database_id = args.database or DEFAULT_DATABASE_ID
+    if not database_id:
+        raise ValueError("No database ID provided. Please specify with --database or set NOTION_DATABASE_ID environment variable.")
+    
+    # Get number of days
+    if args.days is not None:
+        days = args.days
+        # Update the days setting
+        set_days_setting(days)
+    else:
+        days = get_days_setting()
+    
+    # Get last sync time
+    last_sync = get_last_sync_time()
+    print(f"Last sync time: {last_sync or 'Never'}")
+    
+    # Get existing page IDs
+    existing_page_ids = get_existing_page_ids()
+    print(f"Found {len(existing_page_ids)} existing journal entries")
+    
+    print(f"\nSyncing journal entries from the last {days} days...")
+    
+    # Query the database for pages from the specified number of days
+    pages = await get_pages_by_date(database_id, days)
+    
+    # Get page IDs from the response
+    pages_to_sync = [page["id"] for page in pages]
+    print(f"Found {len(pages_to_sync)} journal entries to sync")
+    
+    # Clean up old pages that are no longer in the database
+    removed = cleanup_old_pages(days)
+    print(f"Removed {removed} old journal entries")
+    
+    # Process pages sequentially to avoid memory issues
+    for i, page_id in enumerate(pages_to_sync, 1):
+        await process_page(page_id, i, len(pages_to_sync))
+    
+    # Update last sync time after successful sync
+    update_last_sync_time()
+    print("\nJournal sync completed successfully!")
+
 # ==================== NOTION COMMANDS ====================
 
 async def notion_list_properties(args):
