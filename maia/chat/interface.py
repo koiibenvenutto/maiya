@@ -5,6 +5,7 @@ from anthropic import Anthropic
 from openai import OpenAI
 import os
 import glob
+import sys
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
 from prompt_toolkit.history import FileHistory
@@ -21,7 +22,7 @@ import asyncio
 import traceback  # Added for detailed error tracing
 
 from maia.storage.files import read_markdown_files
-from maia.utils.config import get_days_setting, set_days_setting, update_last_sync_time
+from maia.utils.config import get_days_setting, set_days_setting, get_sync_days_setting, set_sync_days_setting, update_last_sync_time
 from maia.notion.pages import get_pages_by_date
 
 # Configuration file for API preferences
@@ -201,8 +202,8 @@ def print_welcome_message():
         "- [green]exit[/green]: Exit the chat\n"
         "- [green]clear[/green]: Clear chat history\n"
         "- [green]help[/green]: Show this help message\n"
-        "- [green]sync[/green]: Sync Notion pages\n"
-        "- [green]days[/green]: Set the number of days of journal entries to include\n"
+        "- [green]sync[/green]: Sync Notion pages (with separate days setting)\n"
+        "- [green]days[/green]: Set the number of days of journal entries to include in chat context\n"
         "- [green]debug[/green]: Toggle debug mode\n"
         f"- [green]switch[/green]: Switch between Anthropic and OpenAI (currently using {current_api})",
         title="Maia Chat",
@@ -247,32 +248,6 @@ def switch_api():
     debug_print(f"New API: {current_api}")
     return current_api
 
-async def sync_notion_pages():
-    """
-    Sync pages from Notion.
-    
-    Returns:
-        True if sync was successful, False otherwise
-    """
-    from maia.cli import sync_notion_database, process_page
-    
-    try:
-        # Get the last used number of days
-        days_value = get_days_setting()
-        
-        # Parse options like CLI
-        class Args:
-            days = days_value
-            database = os.getenv("NOTION_DATABASE_ID")
-        
-        # Call the sync function
-        console.print(f"[info]Syncing pages from the last {days_value} days...[/info]")
-        await sync_notion_database(Args())
-        return True
-    except Exception as e:
-        console.print(f"[error]Error running sync: {str(e)}[/error]")
-        return False
-
 def set_days():
     """
     Set the number of days of journal entries to include in context.
@@ -282,10 +257,10 @@ def set_days():
     """
     try:
         current_days = get_days_setting()
-        console.print(f"[info]Current days setting: {current_days} days[/info]")
+        console.print(f"[info]Current days setting for chat context: {current_days} days[/info]")
         
         # Get user input for new value
-        days_str = input("Enter number of days of journal entries to include (or press Enter to keep current): ")
+        days_str = input("Enter number of days of journal entries to include in chat context (or press Enter to keep current): ")
         
         if not days_str.strip():
             console.print(f"[info]Keeping current setting: {current_days} days[/info]")
@@ -299,9 +274,9 @@ def set_days():
                 
             # Update the setting
             set_days_setting(days)
-            console.print(f"[info]Updated days setting: {days} days[/info]")
+            console.print(f"[info]Updated chat context days setting: {days} days[/info]")
             
-            debug_print(f"Days setting updated from {current_days} to {days}")
+            debug_print(f"Chat context days setting updated from {current_days} to {days}")
             return days
             
         except ValueError:
@@ -358,14 +333,66 @@ def chat():
                 continue
             elif user_input.lower() == 'sync':
                 debug_print("Running sync command")
-                if asyncio.run(sync_notion_pages()):
-                    # Reload pages and update system prompts
+                console.print("[info]Starting sync process...[/info]")
+                
+                # Get the default days value for sync
+                days_value = get_sync_days_setting() or 7
+                
+                # Prompt user for days
+                days_input = input(f"Enter number of days to sync (default: {days_value}): ").strip()
+                
+                # If user entered a value, use it; otherwise use the default
+                if days_input:
+                    try:
+                        days_value = int(days_input)
+                        if days_value < 1:
+                            console.print("[warning]Days must be at least 1. Setting to 1.[/warning]")
+                            days_value = 1
+                        # Update the sync days setting for next time
+                        set_sync_days_setting(days_value)
+                    except ValueError:
+                        console.print(f"[warning]Invalid input. Using default ({days_value} days).[/warning]")
+                
+                # Run the sync process in a way that preserves all console output
+                import subprocess
+                import sys
+                
+                try:
+                    # Use python -m directly instead of the bash script
+                    cmd = ["python", "-m", "maia", "journal", str(days_value)]
+                    debug_print(f"Running command: {' '.join(cmd)}")
+                    
+                    # Use subprocess.run with live output
+                    process = subprocess.run(
+                        " ".join(cmd),
+                        check=False,  # Don't raise an exception if return code is non-zero
+                        text=True,
+                        shell=True,  # Execute through shell to ensure proper environment
+                        stdout=None,  # Use default stdout (terminal)
+                        stderr=None   # Use default stderr (terminal)
+                    )
+                    
+                    # Check return code
+                    if process.returncode != 0:
+                        console.print(f"[error]Sync process returned error code: {process.returncode}[/error]")
+                    else:
+                        console.print("[info]Sync completed successfully[/info]")
+                    
+                    # Reload pages regardless of return code
                     pages = read_markdown_files()
                     anthropic_system_prompt = create_system_prompt(pages, "anthropic")
                     openai_system_prompt = create_system_prompt(pages, "openai")
+                    
+                    # Clear chat history to avoid confusion with potentially new/changed content
                     messages = []
-                    console.print("[info]Chat context updated with new pages[/info]")
-                    debug_print(f"Sync complete. Updated with {len(pages)} pages")
+                    
+                    console.print("[info]Chat context updated with journal entries[/info]")
+                    debug_print(f"Loaded {len(pages)} journal entries after sync")
+                    
+                except Exception as e:
+                    console.print(f"[error]Error running sync command: {str(e)}[/error]")
+                    debug_print(f"Exception details: {traceback.format_exc()}")
+                
                 continue
             elif user_input.lower() == 'switch':
                 debug_print("Running switch command")

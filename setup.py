@@ -25,7 +25,7 @@ setup(
     install_requires=requirements,
     entry_points={
         "console_scripts": [
-            "maia=maia.cli:main",
+            "maia=maia.__main__:main",
         ],
     },
 ) 

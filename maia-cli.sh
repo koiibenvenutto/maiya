@@ -2,8 +2,11 @@
 # Simple wrapper script for the Maia CLI
 # This allows running 'maia' commands without the 'python -m' prefix
 
-# Get the directory of this script
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# Execute the maia CLI with any arguments passed to this script
-python -m maia.cli "$@" 
+# Add the project root to PYTHONPATH
+export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
+
+# Run the maia module
+python3 -m maia "$@" 

@@ -32,7 +32,8 @@ def get_config() -> Dict[str, Any]:
     # Return default config if no file exists or there was an error
     return {
         'last_sync': None,
-        'last_days': 5  # Default to 5 days
+        'context_days': 5,  # Default for chat context (was last_days)
+        'sync_days': 5      # Default for sync command
     }
 
 def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -83,17 +84,20 @@ def get_last_sync_time() -> Optional[str]:
 
 def get_days_setting() -> int:
     """
-    Get the number of days to look back for content.
+    Get the number of days to look back for content in the chat context.
     
     Returns:
         Number of days as integer
     """
     config = get_config()
-    return config.get('last_days', 5)  # Default to 5 days
+    # Handle migration from old config format
+    if 'last_days' in config and 'context_days' not in config:
+        return config.get('last_days', 5)
+    return config.get('context_days', 5)  # Default to 5 days
 
 def set_days_setting(days: int) -> int:
     """
-    Set the number of days to look back for content.
+    Set the number of days to look back for content in chat context.
     
     Args:
         days: Number of days to look back
@@ -104,6 +108,36 @@ def set_days_setting(days: int) -> int:
     if days <= 0:
         days = 1  # Ensure a minimum of 1 day
     
-    update_config({'last_days': days})
+    update_config({'context_days': days})
+    
+    return days
+
+def get_sync_days_setting() -> int:
+    """
+    Get the number of days to sync from Notion.
+    
+    Returns:
+        Number of days as integer
+    """
+    config = get_config()
+    # Handle migration from old config format
+    if 'last_days' in config and 'sync_days' not in config:
+        return config.get('last_days', 5)
+    return config.get('sync_days', 5)  # Default to 5 days
+
+def set_sync_days_setting(days: int) -> int:
+    """
+    Set the number of days to sync from Notion.
+    
+    Args:
+        days: Number of days to sync
+        
+    Returns:
+        The days value that was set
+    """
+    if days <= 0:
+        days = 1  # Ensure a minimum of 1 day
+    
+    update_config({'sync_days': days})
     
     return days 

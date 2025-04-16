@@ -4,6 +4,8 @@ python-dotenv==1.0.1  # Environment variable management
 rich==13.7.0          # Rich text and formatting in terminal
 python-slugify>=7.0.0 # URL slug generation
 requests>=2.28.0      # HTTP client for APIs
+requests-toolbelt>=1.0.0  # Extensions for requests library
+beautifulsoup4>=4.9.0 # HTML parsing
 
 # CLI and terminal interface
 prompt_toolkit==3.0.43  # Command-line interface toolkit

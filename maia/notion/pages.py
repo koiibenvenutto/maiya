@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
 from maia.notion.client import notion_client
+from maia.utils.config import get_last_sync_time
 
 # Cache for blocks to avoid redundant API calls
 block_cache = {}
@@ -138,28 +139,61 @@ async def get_pages_by_date(database_id: str, days: int = 30):
     """
     Get pages from the specified database within the last specified days.
     
+    The function will create a filter that:
+    1. Gets pages with a "Date" property within the last specified days AND
+    2. Includes pages that were last edited since the last sync time
+    
     Args:
         database_id: ID of the Notion database
         days: Number of days to look back
         
     Returns:
-        List of page objects within the date range
+        List of page objects within the date range and/or edited since last sync
     """
+    # Calculate the date for our rolling window
     days_ago = (datetime.now() - timedelta(days=days)).isoformat()
     
-    filter_condition = {
-        "property": "Date", 
-        "date": {
-            "on_or_after": days_ago
-        }
-    }
+    # Get the last sync time
+    last_sync = get_last_sync_time()
     
+    if last_sync:
+        # If we have a last sync time, use a compound filter for both date range AND edited since last sync
+        filter_condition = {
+            "or": [
+                {
+                    # Pages with a date in our rolling window
+                    "property": "Date", 
+                    "date": {
+                        "on_or_after": days_ago
+                    }
+                },
+                {
+                    # Pages edited since last sync regardless of date
+                    "timestamp": "last_edited_time",
+                    "last_edited_time": {
+                        "after": last_sync
+                    }
+                }
+            ]
+        }
+    else:
+        # If no last sync time, just use the date range filter
+        filter_condition = {
+            "property": "Date", 
+            "date": {
+                "on_or_after": days_ago
+            }
+        }
+    
+    # Sort by date descending
     sort_condition = [
         {
             "property": "Date", 
             "direction": "descending"
         }
     ]
+    
+    print(f"Querying database with filter: {filter_condition}")
     
     return await query_database(database_id, filter_condition, sort_condition)
 

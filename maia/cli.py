@@ -6,18 +6,22 @@ import os
 import asyncio
 import argparse
 from typing import List, Dict, Any
+from datetime import datetime, timedelta
+import json
+import re
+import sys
 
 # Import modules
 from maia.notion.client import notion_client
-from maia.notion.pages import get_sync_pages, get_pages_by_date, get_page_title, get_block_content, clear_block_cache, get_database_properties
+from maia.notion.pages import get_pages_by_date, get_page_title, get_block_content, clear_block_cache
 from maia.markdown.converter import page_to_markdown
-from maia.storage.files import save_page_to_file, get_existing_page_ids, cleanup_old_pages
-from maia.utils.config import update_last_sync_time, get_last_sync_time, get_days_setting, set_days_setting
+from maia.storage.files import save_page_to_file, get_existing_page_ids
+from maia.utils.config import update_last_sync_time, get_last_sync_time, get_days_setting, set_days_setting, get_sync_days_setting, set_sync_days_setting
+from maia.notion.blocks import get_block_content
 
-# Database ID for the Notion database (default to environment variable)
-DEFAULT_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
+# Database IDs
 WEBFLOW_CMS_DATABASE_ID = "10dd13396967807ab987c92a4d29b9b8"  # Database ID for Webflow CMS operations
-JOURNAL_DATABASE_ID = "259700448ad145849e67fa1040a0e120"  # Specific ID for journal database
+JOURNAL_DATABASE_ID = os.getenv("NOTION_JOURNAL_DATABASE_ID", "259700448ad145849e67fa1040a0e120")  # Specific ID for journal database
 
 async def process_page(page_id: str, index: int, total: int):
     """
@@ -42,170 +46,34 @@ async def process_page(page_id: str, index: int, total: int):
     # Convert blocks to markdown
     markdown_content = page_to_markdown(blocks)
     
-    # Save the page to a file
+    # Save the page to a file without adding today's date
     filepath = await save_page_to_file(page_id, title, markdown_content)
     
     print(f"[{index}/{total}] ✓ Saved page to {filepath}")
     print("-" * 80)
 
-async def sync_notion_database(args):
-    """
-    Sync pages from a Notion database to local markdown files.
-    
-    Args:
-        args: Command line arguments
-    """
-    # Get database ID
-    database_id = args.database or DEFAULT_DATABASE_ID
-    if not database_id:
-        raise ValueError("No database ID provided. Please specify with --database or set NOTION_DATABASE_ID environment variable.")
-    
-    # Get number of days
-    if args.days is not None:
-        days = args.days
-        # Update the days setting
-        set_days_setting(days)
-    else:
-        days = get_days_setting()
-    
-    # Get last sync time
-    last_sync = get_last_sync_time()
-    print(f"Last sync time: {last_sync or 'Never'}")
-    
-    # Get existing page IDs
-    existing_page_ids = get_existing_page_ids()
-    print(f"Found {len(existing_page_ids)} existing journal entries")
-    
-    print(f"\nSyncing journal entries from the last {days} days...")
-    
-    # Query the database for pages from the specified number of days
-    pages = await get_pages_by_date(database_id, days)
-    
-    # Get page IDs from the response
-    pages_to_sync = [page["id"] for page in pages]
-    print(f"Found {len(pages_to_sync)} journal entries to sync")
-    
-    # Clean up old pages that are no longer in the database
-    removed = cleanup_old_pages(days)
-    print(f"Removed {removed} old journal entries")
-    
-    # Process pages sequentially to avoid memory issues
-    for i, page_id in enumerate(pages_to_sync, 1):
-        await process_page(page_id, i, len(pages_to_sync))
-    
-    # Update last sync time after successful sync
-    update_last_sync_time()
-    print("\nJournal sync completed successfully!")
-
-# ==================== NOTION COMMANDS ====================
-
-async def notion_list_properties(args):
-    """List all properties in a Notion database."""
-    database_id = args.database or DEFAULT_DATABASE_ID
-    
-    if not database_id:
-        raise ValueError("No database ID provided. Please specify with --database or set NOTION_DATABASE_ID environment variable.")
-    
-    print(f"Getting properties from database {database_id}...")
-    
-    # Get the database properties
-    properties = await get_database_properties(database_id)
-    
-    if not properties:
-        print("No properties found or error retrieving database.")
-        return
-    
-    print("\nDatabase properties:")
-    for prop_name, prop_type in properties.items():
-        print(f"- {prop_name} ({prop_type})")
-    
-    return properties
-
-async def notion_list_sync_pages(args):
-    """List pages in the database with Sync=true."""
-    database_id = args.database or DEFAULT_DATABASE_ID
-    sync_property = args.sync_property or "Sync"
-    
-    print(f"Getting pages from database {database_id} with {sync_property}=true...")
-    
-    # Get pages where Sync is checked true
-    pages = await get_sync_pages(database_id, sync_property)
-    
-    # Print pages info
-    print(f"Found {len(pages)} pages with {sync_property}=true")
-    
-    if pages:
-        print("\nPages to sync:")
-        for i, page in enumerate(pages, 1):
-            page_id = page["id"]
-            title = await get_page_title(page_id)
-            print(f"{i}. {title} ({page_id})")
-    
-    return pages
-
-async def notion_debug_page(args):
-    """Debug a specific Notion page."""
-    # Import modules
-    from maia.notion.pages import get_page_title, get_block_content, clear_block_cache
-    from maia.webflow.sync import notion_to_webflow_item
-    
-    # Get page ID
-    page_id = args.page_id
-    
-    if not page_id:
-        raise ValueError("No page ID provided. Please specify with --page-id.")
-    
-    print(f"Debugging Notion page {page_id}...")
-    
-    try:
-        # Get the page from Notion API
-        page = await notion_client.pages.retrieve(page_id=page_id)
-        
-        # Get page title
-        title = await get_page_title(page_id)
-        print(f"Page title: {title}")
-        
-        # Get raw properties
-        properties = page.get("properties", {})
-        print("\nRaw properties:")
-        for prop_name, prop_value in properties.items():
-            prop_type = prop_value.get("type", "unknown")
-            print(f"- {prop_name} ({prop_type})")
-        
-        # Convert to Webflow item
-        print("\nConverting to Webflow item...")
-        webflow_data = await notion_to_webflow_item(page)
-        
-        # Print Webflow data
-        print("\nWebflow data:")
-        for field_name, field_value in webflow_data.items():
-            if field_name == "post-body":
-                value_preview = f"{str(field_value)[:100]}..." if field_value else "None"
-                print(f"- {field_name}: {value_preview}")
-            else:
-                print(f"- {field_name}: {field_value}")
-        
-        return webflow_data
-    except Exception as e:
-        print(f"Error debugging page: {str(e)}")
-        return None
-
 # ==================== JOURNAL COMMANDS ====================
 
 async def journal_sync(args):
     """Sync journal entries from Notion to local markdown files."""
+    print("Starting journal sync...")
+    
     # Get database ID
     database_id = args.database or JOURNAL_DATABASE_ID
     if not database_id:
         raise ValueError("No database ID provided. Please specify with --database or set JOURNAL_DATABASE_ID environment variable.")
     
+    print(f"Using database ID: {database_id}")
+    
     # Get number of days
     if args.days is not None:
         days = args.days
-        # Update the days setting
-        set_days_setting(days)
+        # Update the sync days setting
+        set_sync_days_setting(days)
     else:
-        days = get_days_setting()
+        days = get_sync_days_setting()
+    
+    print(f"Using days setting: {days}")
     
     # Get last sync time
     last_sync = get_last_sync_time()
@@ -218,19 +86,50 @@ async def journal_sync(args):
     print(f"\nSyncing journal entries from the last {days} days...")
     
     # Query the database for pages from the specified number of days
-    pages = await get_pages_by_date(database_id, days)
+    try:
+        pages = await get_pages_by_date(database_id, days)
+        print(f"Successfully retrieved {len(pages)} pages from Notion")
+    except Exception as e:
+        print(f"Error retrieving pages from Notion: {str(e)}")
+        raise
     
-    # Get page IDs from the response
-    pages_to_sync = [page["id"] for page in pages]
-    print(f"Found {len(pages_to_sync)} journal entries to sync")
+    # Filter pages based on last_edited_time and existing pages
+    pages_to_sync = []
+    skipped_count = 0
     
-    # Clean up old pages that are no longer in the database
-    removed = cleanup_old_pages(days)
-    print(f"Removed {removed} old journal entries")
+    for page in pages:
+        page_id = page["id"]
+        last_edited_time = page.get("last_edited_time")
+        
+        # Process pages that are either:
+        # 1. New (not in existing_page_ids)
+        # 2. Modified since last sync
+        if page_id not in existing_page_ids:
+            print(f"  Adding new page: {page_id}")
+            pages_to_sync.append(page_id)
+        elif not last_sync or (last_edited_time and last_edited_time > last_sync):
+            print(f"  Adding modified page: {page_id} (edited: {last_edited_time})")
+            pages_to_sync.append(page_id)
+        else:
+            skipped_count += 1
+    
+    print(f"Found {len(pages_to_sync)} journal entries to sync (skipped {skipped_count} unmodified entries)")
+    
+    # If no pages to sync, inform the user
+    if not pages_to_sync:
+        print("All journal entries are already up to date.")
+        update_last_sync_time()
+        print("\nJournal sync completed successfully!")
+        return
     
     # Process pages sequentially to avoid memory issues
     for i, page_id in enumerate(pages_to_sync, 1):
-        await process_page(page_id, i, len(pages_to_sync))
+        try:
+            await process_page(page_id, i, len(pages_to_sync))
+        except Exception as e:
+            print(f"Error processing page {page_id}: {str(e)}")
+            # Continue with the next page instead of failing completely
+            continue
     
     # Update last sync time after successful sync
     update_last_sync_time()
@@ -244,14 +143,22 @@ async def webflow_sync(args):
     from maia.webflow.sync import sync_to_webflow
     
     # Get database and collection IDs
-    notion_database_id = args.database or WEBFLOW_CMS_DATABASE_ID  # Use Webflow CMS database ID by default
+    notion_database_id = args.database or WEBFLOW_CMS_DATABASE_ID
     webflow_collection_id = args.collection or os.getenv("WEBFLOW_COLLECTION_ID")
     sync_property = args.sync_property or "Sync"
+    force_update = args.force if hasattr(args, 'force') else False
     
     print(f"Syncing Webflow CMS database {notion_database_id} to Webflow collection {webflow_collection_id}...")
+    if force_update:
+        print("Force update enabled - all items will be updated regardless of edit time")
     
     # Run the sync function
-    return await sync_to_webflow(notion_database_id, webflow_collection_id, sync_property=sync_property)
+    return await sync_to_webflow(
+        notion_database_id=notion_database_id, 
+        webflow_collection_id=webflow_collection_id, 
+        sync_property=sync_property,
+        force_update=force_update
+    )
 
 async def webflow_command(args):
     """Default command for webflow - runs sync."""
@@ -316,6 +223,22 @@ def chat_run(args):
 
 def main():
     """Main entry point for the application."""
+    # Check for direct 'maia journal X' pattern before parsing
+    if len(sys.argv) >= 3 and sys.argv[1] == 'journal' and sys.argv[2].isdigit():
+        days = int(sys.argv[2])
+        print(f"Using shortcut: journal {days} (syncing last {days} days)")
+        
+        # Create args for journal_sync
+        class Args:
+            def __init__(self):
+                self.days = days
+                self.database = None
+        
+        # Run the journal sync with the days value
+        asyncio.run(journal_sync(Args()))
+        return
+    
+    # Regular command parsing for all other cases
     parser = argparse.ArgumentParser(description="Maia CLI - Notion to Markdown and more")
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
@@ -329,82 +252,29 @@ def main():
     journal_sync_parser.add_argument('--database', type=str, help='Notion database ID')
     journal_sync_parser.set_defaults(func=journal_sync)
     
+    # Set default function for journal command when no subcommand is provided
+    journal_parser.set_defaults(func=handle_journal_command)
+    
     # ===== WEBFLOW COMMAND =====
-    webflow_parser = subparsers.add_parser('webflow', help='Webflow operations')
-    webflow_parser.set_defaults(func=webflow_command)  # Default function when no subcommand is provided
-    webflow_subparsers = webflow_parser.add_subparsers(dest='subcommand', help='Webflow subcommands')
+    webflow_parser = subparsers.add_parser('webflow', help='Webflow commands')
+    webflow_subparsers = webflow_parser.add_subparsers(dest='webflow_command', help='Webflow subcommands')
     
-    # Webflow sync
-    webflow_sync_parser = webflow_subparsers.add_parser('sync', help='Sync Notion pages to Webflow CMS')
-    webflow_sync_parser.add_argument('--database', type=str, help='Notion database ID')
-    webflow_sync_parser.add_argument('--collection', type=str, help='Webflow collection ID (default: WEBFLOW_COLLECTION_ID env var)')
-    webflow_sync_parser.add_argument('--sync-property', type=str, help='Name of the sync property in Notion (default: "Sync")')
-    webflow_sync_parser.set_defaults(func=webflow_sync)
+    # Sync command
+    sync_parser = webflow_subparsers.add_parser('sync', help='Sync Notion pages to Webflow CMS')
+    sync_parser.add_argument('--database', help='Notion database ID')
+    sync_parser.add_argument('--collection', help='Webflow collection ID (default: WEBFLOW_COLLECTION_ID env var)')
+    sync_parser.add_argument('--sync-property', help='Name of the sync property in Notion (default: "Sync")')
+    sync_parser.add_argument('--force', action='store_true', help='Force update all items regardless of edit time')
+    sync_parser.set_defaults(func=webflow_sync)
     
-    # Webflow list fields
-    webflow_list_parser = webflow_subparsers.add_parser('fields', help='List all fields in a Webflow collection')
-    webflow_list_parser.add_argument('--collection', type=str, help='Webflow collection ID')
-    webflow_list_parser.set_defaults(func=webflow_list_collection)
-    
-    # ===== NOTION COMMAND =====
-    notion_parser = subparsers.add_parser('notion', help='Notion operations')
-    notion_subparsers = notion_parser.add_subparsers(dest='subcommand', help='Notion subcommands')
-    
-    # Notion list properties
-    notion_properties_parser = notion_subparsers.add_parser('properties', help='List all properties in a Notion database')
-    notion_properties_parser.add_argument('--database', type=str, help='Notion database ID')
-    notion_properties_parser.set_defaults(func=notion_list_properties)
-    
-    # Notion list sync pages
-    notion_list_sync_parser = notion_subparsers.add_parser('list-sync', help='List pages with Sync=true')
-    notion_list_sync_parser.add_argument('--database', type=str, help='Notion database ID')
-    notion_list_sync_parser.add_argument('--sync-property', type=str, help='Name of the sync property (default: "Sync")')
-    notion_list_sync_parser.set_defaults(func=notion_list_sync_pages)
-    
-    # Notion debug page
-    notion_debug_parser = notion_subparsers.add_parser('debug', help='Debug a specific Notion page')
-    notion_debug_parser.add_argument('--page-id', type=str, required=True, help='Notion page ID')
-    notion_debug_parser.set_defaults(func=notion_debug_page)
+    # Fields command
+    fields_parser = webflow_subparsers.add_parser('fields', help='List all fields in a Webflow collection')
+    fields_parser.add_argument('--collection', required=True, help='Webflow collection ID')
+    fields_parser.set_defaults(func=webflow_list_collection)
     
     # ===== CHAT COMMAND =====
     chat_parser = subparsers.add_parser('chat', help='Start the chat interface')
     chat_parser.set_defaults(func=chat_run)
-    
-    # ===== BACKWARDS COMPATIBILITY =====
-    # These commands maintain compatibility with the old command structure
-    
-    # Sync command (journal sync)
-    sync_parser = subparsers.add_parser('sync', help='Sync pages from Notion database')
-    sync_parser.add_argument('--days', type=int, help='Number of days to look back for pages')
-    sync_parser.add_argument('--database', type=str, help='Notion database ID')
-    sync_parser.set_defaults(func=journal_sync)
-    
-    # List-sync command (notion list-sync)
-    list_sync_parser = subparsers.add_parser('list-sync', help='List pages with Sync=true')
-    list_sync_parser.add_argument('--database', type=str, help='Notion database ID')
-    list_sync_parser.add_argument('--sync-property', type=str, help='Name of the sync property (default: "Sync")')
-    list_sync_parser.set_defaults(func=notion_list_sync_pages)
-    
-    # Export-blog command (journal sync)
-    export_blog_parser = subparsers.add_parser('export-blog', help='Export pages with Sync=true to markdown')
-    export_blog_parser.add_argument('--database', type=str, help='Notion database ID')
-    export_blog_parser.add_argument('--sync-property', type=str, help='Name of the sync property (default: "Sync")')
-    export_blog_parser.set_defaults(func=journal_sync)
-    
-    # List-database command (notion properties)
-    list_database_parser = subparsers.add_parser('list-database', help='List all properties in a Notion database')
-    list_database_parser.add_argument('--database', type=str, help='Notion database ID')
-    list_database_parser.set_defaults(func=notion_list_properties)
-    
-    # List-collection command (webflow fields)
-    list_collection_parser = subparsers.add_parser('list-collection', help='List all fields in a Webflow collection')
-    list_collection_parser.add_argument('--collection', type=str, help='Webflow collection ID')
-    list_collection_parser.set_defaults(func=webflow_list_collection)
-    
-    # Debug-page command (notion debug)
-    debug_page_parser = subparsers.add_parser('debug-page', help='Debug a specific Notion page')
-    debug_page_parser.add_argument('--page-id', type=str, required=True, help='Notion page ID')
-    debug_page_parser.set_defaults(func=notion_debug_page)
     
     # Parse arguments
     args = parser.parse_args()
@@ -422,14 +292,29 @@ def main():
             print(f"Error: {str(e)}")
     else:
         # If no command was specified, print help
-        if args.command == 'webflow' and not args.subcommand:
+        if args.command == 'webflow' and not args.webflow_command:
             # For webflow command with no subcommand, run the default function
             try:
                 asyncio.run(webflow_command(args))
             except Exception as e:
                 print(f"Error: {str(e)}")
+        elif args.command == 'journal' and not args.subcommand:
+            # For journal command with no subcommand, run the default handler
+            try:
+                asyncio.run(handle_journal_command(args))
+            except Exception as e:
+                print(f"Error: {str(e)}")
         else:
             parser.print_help()
+
+# Add handler for direct journal command with days argument
+async def handle_journal_command(args):
+    """Handle journal command when called with no arguments."""
+    # Show help for journal command
+    print("Journal command usage examples:")
+    print("  maia journal 7         # Sync the last 7 days")
+    print("  maia journal sync      # Sync using the default days setting")
+    print("  maia journal sync --days 14  # Sync the last 14 days")
 
 if __name__ == "__main__":
     main() 
