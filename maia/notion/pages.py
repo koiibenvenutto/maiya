@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
 from maia.notion.client import notion_client
-from maia.utils.config import get_last_sync_time
+from maia.utils.config import get_last_sync_time, get_sync_days_setting
 
 # Cache for blocks to avoid redundant API calls
 block_cache = {}

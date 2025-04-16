@@ -6,18 +6,13 @@ import os
 import asyncio
 import argparse
 from typing import List, Dict, Any
-from datetime import datetime, timedelta
-import json
-import re
-import sys
 
 # Import modules
 from maia.notion.client import notion_client
 from maia.notion.pages import get_pages_by_date, get_page_title, get_block_content, clear_block_cache
 from maia.markdown.converter import page_to_markdown
 from maia.storage.files import save_page_to_file, get_existing_page_ids
-from maia.utils.config import update_last_sync_time, get_last_sync_time, get_days_setting, set_days_setting, get_sync_days_setting, set_sync_days_setting
-from maia.notion.blocks import get_block_content
+from maia.utils.config import update_last_sync_time, get_last_sync_time, get_sync_days_setting, set_sync_days_setting
 
 # Database IDs
 WEBFLOW_CMS_DATABASE_ID = "10dd13396967807ab987c92a4d29b9b8"  # Database ID for Webflow CMS operations
@@ -68,7 +63,7 @@ async def journal_sync(args):
     # Get number of days
     if args.days is not None:
         days = args.days
-        # Update the sync days setting
+        # Update the days setting
         set_sync_days_setting(days)
     else:
         days = get_sync_days_setting()
@@ -223,6 +218,8 @@ def chat_run(args):
 
 def main():
     """Main entry point for the application."""
+    import sys
+    
     # Check for direct 'maia journal X' pattern before parsing
     if len(sys.argv) >= 3 and sys.argv[1] == 'journal' and sys.argv[2].isdigit():
         days = int(sys.argv[2])

@@ -22,7 +22,7 @@ import asyncio
 import traceback  # Added for detailed error tracing
 
 from maia.storage.files import read_markdown_files
-from maia.utils.config import get_days_setting, set_days_setting, get_sync_days_setting, set_sync_days_setting, update_last_sync_time
+from maia.utils.config import get_chat_days_setting, set_chat_days_setting, get_sync_days_setting, set_sync_days_setting
 from maia.notion.pages import get_pages_by_date
 
 # Configuration file for API preferences
@@ -145,8 +145,8 @@ def create_system_prompt(pages, for_api="anthropic"):
     today_str = today.strftime("%Y-%m-%d")
     
     # Get days setting
-    last_days = get_days_setting()
-    debug_print(f"Using days setting: {last_days}")
+    last_days = get_chat_days_setting()
+    debug_print(f"Using chat context days setting: {last_days}")
     
     # Calculate the date 'last_days' ago
     days_ago = today - timedelta(days=last_days)
@@ -202,8 +202,8 @@ def print_welcome_message():
         "- [green]exit[/green]: Exit the chat\n"
         "- [green]clear[/green]: Clear chat history\n"
         "- [green]help[/green]: Show this help message\n"
-        "- [green]sync[/green]: Sync Notion pages (with separate days setting)\n"
-        "- [green]days[/green]: Set the number of days of journal entries to include in chat context\n"
+        "- [green]sync[/green]: Sync Notion pages\n"
+        "- [green]days[/green]: Set the number of days of journal entries to include\n"
         "- [green]debug[/green]: Toggle debug mode\n"
         f"- [green]switch[/green]: Switch between Anthropic and OpenAI (currently using {current_api})",
         title="Maia Chat",
@@ -256,8 +256,8 @@ def set_days():
         Integer representing the new setting
     """
     try:
-        current_days = get_days_setting()
-        console.print(f"[info]Current days setting for chat context: {current_days} days[/info]")
+        current_days = get_chat_days_setting()
+        console.print(f"[info]Current chat context days setting: {current_days} days[/info]")
         
         # Get user input for new value
         days_str = input("Enter number of days of journal entries to include in chat context (or press Enter to keep current): ")
@@ -273,7 +273,7 @@ def set_days():
                 days = 1
                 
             # Update the setting
-            set_days_setting(days)
+            set_chat_days_setting(days)
             console.print(f"[info]Updated chat context days setting: {days} days[/info]")
             
             debug_print(f"Chat context days setting updated from {current_days} to {days}")
@@ -286,7 +286,7 @@ def set_days():
     except Exception as e:
         console.print(f"[error]Error setting days: {str(e)}[/error]")
         debug_print(f"Exception in set_days: {traceback.format_exc()}")
-        return get_days_setting()  # Fall back to current setting
+        return get_chat_days_setting()  # Fall back to current setting
 
 def chat():
     """Main chat loop with markdown support."""
@@ -335,7 +335,7 @@ def chat():
                 debug_print("Running sync command")
                 console.print("[info]Starting sync process...[/info]")
                 
-                # Get the default days value for sync
+                # Get the default days value
                 days_value = get_sync_days_setting() or 7
                 
                 # Prompt user for days
@@ -348,7 +348,7 @@ def chat():
                         if days_value < 1:
                             console.print("[warning]Days must be at least 1. Setting to 1.[/warning]")
                             days_value = 1
-                        # Update the sync days setting for next time
+                        # Update the setting for next time
                         set_sync_days_setting(days_value)
                     except ValueError:
                         console.print(f"[warning]Invalid input. Using default ({days_value} days).[/warning]")
@@ -405,7 +405,7 @@ def chat():
             elif user_input.lower() == 'days':
                 debug_print("Running days command")
                 
-                old_days = get_days_setting()
+                old_days = get_chat_days_setting()
                 new_days = set_days()
                 
                 # Reload pages to ensure we have all available entries

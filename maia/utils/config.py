@@ -32,8 +32,8 @@ def get_config() -> Dict[str, Any]:
     # Return default config if no file exists or there was an error
     return {
         'last_sync': None,
-        'context_days': 5,  # Default for chat context (was last_days)
-        'sync_days': 5      # Default for sync command
+        'last_days': 5,  # Default to 5 days for sync
+        'chat_context_days': 5  # Default to 5 days for chat context
     }
 
 def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -82,22 +82,19 @@ def get_last_sync_time() -> Optional[str]:
     config = get_config()
     return config.get('last_sync')
 
-def get_days_setting() -> int:
+def get_sync_days_setting() -> int:
     """
-    Get the number of days to look back for content in the chat context.
+    Get the number of days to look back for Notion sync.
     
     Returns:
         Number of days as integer
     """
     config = get_config()
-    # Handle migration from old config format
-    if 'last_days' in config and 'context_days' not in config:
-        return config.get('last_days', 5)
-    return config.get('context_days', 5)  # Default to 5 days
+    return config.get('last_days', 5)  # Default to 5 days
 
-def set_days_setting(days: int) -> int:
+def set_sync_days_setting(days: int) -> int:
     """
-    Set the number of days to look back for content in chat context.
+    Set the number of days to look back for Notion sync.
     
     Args:
         days: Number of days to look back
@@ -108,29 +105,26 @@ def set_days_setting(days: int) -> int:
     if days <= 0:
         days = 1  # Ensure a minimum of 1 day
     
-    update_config({'context_days': days})
+    update_config({'last_days': days})
     
     return days
 
-def get_sync_days_setting() -> int:
+def get_chat_days_setting() -> int:
     """
-    Get the number of days to sync from Notion.
+    Get the number of days to look back for chat context.
     
     Returns:
         Number of days as integer
     """
     config = get_config()
-    # Handle migration from old config format
-    if 'last_days' in config and 'sync_days' not in config:
-        return config.get('last_days', 5)
-    return config.get('sync_days', 5)  # Default to 5 days
+    return config.get('chat_context_days', 5)  # Default to 5 days
 
-def set_sync_days_setting(days: int) -> int:
+def set_chat_days_setting(days: int) -> int:
     """
-    Set the number of days to sync from Notion.
+    Set the number of days to look back for chat context.
     
     Args:
-        days: Number of days to sync
+        days: Number of days to look back
         
     Returns:
         The days value that was set
@@ -138,6 +132,36 @@ def set_sync_days_setting(days: int) -> int:
     if days <= 0:
         days = 1  # Ensure a minimum of 1 day
     
-    update_config({'sync_days': days})
+    update_config({'chat_context_days': days})
+    
+    return days
+
+# Legacy functions for backward compatibility - these will be removed in a future version
+def get_days_setting() -> int:
+    """
+    Get the number of days to look back for content.
+    DEPRECATED: Use get_sync_days_setting() or get_chat_days_setting() instead.
+    
+    Returns:
+        Number of days as integer
+    """
+    config = get_config()
+    return config.get('last_days', 5)  # Default to 5 days
+
+def set_days_setting(days: int) -> int:
+    """
+    Set the number of days to look back for content.
+    DEPRECATED: Use set_sync_days_setting() or set_chat_days_setting() instead.
+    
+    Args:
+        days: Number of days to look back
+        
+    Returns:
+        The days value that was set
+    """
+    if days <= 0:
+        days = 1  # Ensure a minimum of 1 day
+    
+    update_config({'last_days': days})
     
     return days 
