@@ -194,6 +194,28 @@ def format_message(role, content):
     """Format a message with markdown support."""
     return Markdown(content)
 
+def display_message_with_timestamp(role, content):
+    """
+    Display a message with a timestamp in a consistent format.
+    
+    Args:
+        role: The role of the message sender (user or assistant)
+        content: The message content
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Display a horizontal rule
+    console.print("---")
+    
+    # Display the timestamp and role
+    role_display = "You" if role == "user" else "AI"
+    console.print(f"[dim italic]{timestamp} | {role_display}[/dim italic]")
+    
+    # Display the content with markdown formatting
+    console.print(format_message(role, content))
+    
+    # Don't add the trailing horizontal rule - we'll add it before the next message
+
 def print_welcome_message():
     """Print welcome message with available commands."""
     console.print(Panel.fit(
@@ -306,6 +328,9 @@ def chat():
 
     # Print welcome message
     print_welcome_message()
+    
+    # Print an initial horizontal rule for the first message
+    console.print("---")
 
     # Initialize conversation history (without system message)
     messages = []
@@ -322,14 +347,20 @@ def chat():
             elif user_input.lower() == 'clear':
                 messages = []
                 console.print("[info]Chat history cleared[/info]")
+                # Print a new horizontal rule for the next message
+                console.print("---")
                 continue
             elif user_input.lower() == 'help':
                 print_welcome_message()
+                # Print a new horizontal rule for the next message
+                console.print("---")
                 continue
             elif user_input.lower() == 'debug':
                 DEBUG_MODE = not DEBUG_MODE
                 os.environ["MAIA_DEBUG"] = "1" if DEBUG_MODE else "0"
                 console.print(f"[info]Debug mode {'enabled' if DEBUG_MODE else 'disabled'}[/info]")
+                # Print a new horizontal rule for the next message
+                console.print("---")
                 continue
             elif user_input.lower() == 'sync':
                 debug_print("Running sync command")
@@ -393,6 +424,8 @@ def chat():
                     console.print(f"[error]Error running sync command: {str(e)}[/error]")
                     debug_print(f"Exception details: {traceback.format_exc()}")
                 
+                # Print a new horizontal rule for the next message
+                console.print("---")
                 continue
             elif user_input.lower() == 'switch':
                 debug_print("Running switch command")
@@ -401,6 +434,8 @@ def chat():
                 messages = []
                 console.print("[info]Chat history cleared due to API switch[/info]")
                 print_welcome_message()
+                # Print a new horizontal rule for the next message
+                console.print("---")
                 continue
             elif user_input.lower() == 'days':
                 debug_print("Running days command")
@@ -424,10 +459,18 @@ def chat():
                     console.print("[info]Context updated with new days setting. Chat history cleared.[/info]")
                 else:
                     console.print("[info]Days setting unchanged. Chat history cleared.[/info]")
+                
+                # Print a new horizontal rule for the next message
+                console.print("---")
                 continue
 
-            # Add user message to history
+            # Add user message to history with timestamp
             messages.append({"role": "user", "content": user_input})
+            
+            # Display the user message with timestamp in debug mode only
+            # We don't show it normally since the prompt already showed the user input
+            if DEBUG_MODE:
+                display_message_with_timestamp("user", user_input)
 
             # Get response based on current API
             if current_api == "anthropic":
@@ -478,14 +521,8 @@ def chat():
             # Add assistant message to history
             messages.append({"role": "assistant", "content": assistant_message})
             
-            # Display a horizontal rule before the assistant message
-            console.print("---")
-            
-            # Display assistant message with markdown formatting
-            console.print(format_message("assistant", assistant_message))
-
-            # Display a horizontal rule after the assistant message
-            console.print("---")
+            # Display the assistant message with timestamp
+            display_message_with_timestamp("assistant", assistant_message)
 
         except KeyboardInterrupt:
             console.print("\n[info]Use 'exit' to quit[/info]")
